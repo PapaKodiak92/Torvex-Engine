@@ -485,3 +485,6 @@ $RECYCLE.BIN/
 repair-backups/
 *.bak-m5-snowfix
 patch-snow-terrain-clean.ps1
+
+# Local Stonewright saves
+saves/

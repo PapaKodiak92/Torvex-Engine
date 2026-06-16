@@ -113,7 +113,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private readonly List<PlacedConstructionPiece> _placedConstructionPieces = [];
     private bool _wasLeftMouseDown;
     private bool _wasRightMouseDown;
-    private bool _wasBackspaceDown;
 
     private const float FieldOfViewRadians = MathF.PI / 4f;
     private const float DayLengthSeconds = 180f;
@@ -173,8 +172,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         _constructionSocketDebugRenderer = new ConstructionSocketDebugRenderer(_gl);
         _constructionSocketDebugRenderer.Initialize();
-
-        LoadConstructionPieces();
 
         CreateSkyShader();
         CreateSkyMesh();
@@ -854,107 +851,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
         return terrainHeight + snowMask * snowDepth;
     }
 
-    private void LoadConstructionPieces()
-    {
-        string savePath = GetConstructionSavePath();
-
-        if (!File.Exists(savePath))
-        {
-            Console.WriteLine("No construction save found.");
-            return;
-        }
-
-        try
-        {
-            string json = File.ReadAllText(savePath);
-
-            ConstructionSaveFile? saveFile = System.Text.Json.JsonSerializer.Deserialize<ConstructionSaveFile>(
-                json,
-                new System.Text.Json.JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                }
-            );
-
-            if (saveFile?.Pieces is null)
-            {
-                Console.WriteLine("Construction save was empty or invalid.");
-                return;
-            }
-
-            _placedConstructionPieces.Clear();
-
-            foreach (ConstructionPieceSaveData piece in saveFile.Pieces)
-            {
-                _placedConstructionPieces.Add(new PlacedConstructionPiece(
-                    new Vector3(piece.X, piece.Y, piece.Z),
-                    piece.YawRadians,
-                    piece.IsVertical
-                ));
-            }
-
-            Console.WriteLine($"Loaded construction pieces: {_placedConstructionPieces.Count}");
-        }
-        catch (Exception exception)
-        {
-            Console.WriteLine($"Failed to load construction save: {exception.Message}");
-        }
-    }
-
-    private void SaveConstructionPieces()
-    {
-        try
-        {
-            string savePath = GetConstructionSavePath();
-            string? directory = Path.GetDirectoryName(savePath);
-
-            if (!string.IsNullOrWhiteSpace(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            ConstructionSaveFile saveFile = new()
-            {
-                Version = 1
-            };
-
-            foreach (PlacedConstructionPiece piece in _placedConstructionPieces)
-            {
-                saveFile.Pieces.Add(new ConstructionPieceSaveData
-                {
-                    X = piece.Position.X,
-                    Y = piece.Position.Y,
-                    Z = piece.Position.Z,
-                    YawRadians = piece.YawRadians,
-                    IsVertical = piece.IsVertical
-                });
-            }
-
-            string json = System.Text.Json.JsonSerializer.Serialize(
-                saveFile,
-                new System.Text.Json.JsonSerializerOptions
-                {
-                    WriteIndented = true
-                }
-            );
-
-            File.WriteAllText(savePath, json);
-        }
-        catch (Exception exception)
-        {
-            Console.WriteLine($"Failed to save construction pieces: {exception.Message}");
-        }
-    }
-
-    private static string GetConstructionSavePath()
-    {
-        return Path.Combine(
-            Environment.CurrentDirectory,
-            "saves",
-            "stonewright_construction.json"
-        );
-    }
-
     private void RenderConstructionSocketDebug(Matrix4x4 view, Matrix4x4 projection)
     {
         if (!_buildMode || _constructionSocketDebugRenderer is null)
@@ -1042,7 +938,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
             ));
 
             Console.WriteLine($"Placed {(_buildVerticalMode ? "vertical post" : "timber beam")} #{_placedConstructionPieces.Count} at X {buildPosition.X:0.00}, Y {buildPosition.Y:0.00}, Z {buildPosition.Z:0.00}");
-            SaveConstructionPieces();
         }
 
         _wasLeftMouseDown = leftMouseDown;
@@ -1056,18 +951,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
         }
 
         _wasRightMouseDown = rightMouseDown;
-
-        bool backspaceDown = input.IsKeyDown(Key.Backspace);
-
-        if (backspaceDown && !_wasBackspaceDown && _placedConstructionPieces.Count > 0)
-        {
-            _placedConstructionPieces.RemoveAt(_placedConstructionPieces.Count - 1);
-            SaveConstructionPieces();
-
-            Console.WriteLine($"Removed last construction piece. Remaining: {_placedConstructionPieces.Count}");
-        }
-
-        _wasBackspaceDown = backspaceDown;
     }
 
     private void UpdateBuildPreviewControls(float dt, TorvexWindow input)
@@ -2569,7 +2452,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Dispose();
     }
 }
-
 
 
 

@@ -17,7 +17,7 @@ window.Loaded += () =>
     renderer.Initialize();
 
     Console.WriteLine("Stonewright loaded.");
-    Console.WriteLine("Controls: WASD move | Mouse look | F1 toggle mouse | Space/Ctrl vertical | Arrow keys look | Shift fast | T fast-forward day/moon cycle | F2 Clear | F3 Cloudy | F4 Foggy | F5 Rain | F6 Snow | F7 Storm | ESC close");
+    Console.WriteLine("Controls: WASD move | Mouse look | F1 toggle mouse | V walk/fly | Space jump/fly up | Ctrl fly down | Shift fast | T fast-forward day/moon/season | B build mode | X vertical/horizontal | Tab cycle socket | N snap on/off | R rotate 90 | Q/E rotate | Z/C raise/lower | G reset height | Left Click place | Backspace undo | F2-F7 weather | F8/F9 temp | F10/F11 snowpack | F12 seasonal climate | ESC close");
 };
 
 window.Updated += deltaTime =>
@@ -41,6 +41,7 @@ window.Run(new TorvexWindowSettings(
     Height: 720,
     Title: "Stonewright - Powered by Torvex Engine"
 ));
+
 
 
 
