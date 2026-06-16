@@ -338,7 +338,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         _gl.Uniform1(_terrainWetnessLocation, _groundWetness);
         _gl.Uniform1(_terrainSnowAmountLocation, _snowAccumulation);
-        _gl.Uniform1(_terrainSnowDepthLocation, Lerp(0.0f, 0.26f, SmoothStep(0.0f, 1.0f, _snowAccumulation)));
+        _gl.Uniform1(_terrainSnowDepthLocation, Lerp(0.0f, 0.75f, _snowAccumulation));
         _gl.Uniform1(_terrainPuddleAmountLocation, _puddleAmount * (1.0f - _snowAccumulation));
 
         DrawTerrain();
@@ -370,12 +370,12 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         if (input.IsKeyDown(Key.F10) || input.IsKeyDown(Key.PageUp))
         {
-            _snowAccumulation += 0.65f * dt;
+            _snowAccumulation += 1.75f * dt;
         }
 
         if (input.IsKeyDown(Key.F11) || input.IsKeyDown(Key.PageDown))
         {
-            _snowAccumulation -= 0.85f * dt;
+            _snowAccumulation -= 1.75f * dt;
         }
 
         _temperatureC = Math.Clamp(_temperatureC, -35.0f, 45.0f);
@@ -409,7 +409,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _puddleAmount = Math.Clamp(_puddleAmount, 0.0f, 1.0f);
 
         // Strong enough to visibly build up snow during prototype testing.
-        _snowAccumulation += snowAmount * deltaTime * 0.085f;
+        _snowAccumulation += snowAmount * deltaTime * 0.42f;
 
         if (_temperatureC > 0.25f)
         {
@@ -488,7 +488,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
                 _temperatureC = -8f;
                 _windStrength = 0.35f;
                 _windDirection = Vector2.Normalize(new Vector2(0.45f, -0.14f));
-                _snowAccumulation = Math.Max(_snowAccumulation, 0.035f);
+                _snowAccumulation = Math.Max(_snowAccumulation, 0.22f);
                 break;
 
             case WeatherType.Storm:
@@ -1060,15 +1060,10 @@ public sealed unsafe class TorvexRenderer : IDisposable
             vec3 worldNormal = normalize(mat3(uModel) * aNormal);
 
             float upwardFacing = clamp(worldNormal.y, 0.0, 1.0);
-            float terrainNoise =
-                0.5 +
-                sin(worldPosition.x * 0.080) * 0.16 +
-                sin(worldPosition.z * 0.070) * 0.14 +
-                sin((worldPosition.x + worldPosition.z) * 0.045) * 0.10;
-            terrainNoise = clamp(terrainNoise, 0.0, 1.0);
+            float terrainNoise = hash(worldPosition.xz * 0.35);
 
             float slopeMask = smoothstep(0.25, 0.86, upwardFacing);
-            float softBreakup = mix(0.97, 1.03, terrainNoise);
+            float softBreakup = mix(0.88, 1.08, terrainNoise);
 
             float snowMask = clamp(uTerrainSnowAmount * slopeMask * softBreakup, 0.0, 1.0);
 
@@ -1135,14 +1130,9 @@ public sealed unsafe class TorvexRenderer : IDisposable
             vec3 litColor = ambient + directSun + directMoon;
 
             float upwardFacing = clamp(normal.y, 0.0, 1.0);
-            float terrainNoise =
-                0.5 +
-                sin(vertexWorldPosition.x * 0.075) * 0.16 +
-                sin(vertexWorldPosition.z * 0.065) * 0.14 +
-                sin((vertexWorldPosition.x + vertexWorldPosition.z) * 0.040) * 0.10;
-            terrainNoise = clamp(terrainNoise, 0.0, 1.0);
+            float terrainNoise = hash(vertexWorldPosition.xz * 0.42);
 
-            float snowMask = clamp(vertexSnowMask * 1.18, 0.0, 1.0);
+            float snowMask = clamp(vertexSnowMask * 1.75, 0.0, 1.0);
 
             float wetMask = uTerrainWetness * smoothstep(0.20, 0.95, upwardFacing) * (1.0 - snowMask);
             litColor = mix(litColor, litColor * vec3(0.46, 0.50, 0.48), wetMask * 0.72);
@@ -1164,7 +1154,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
                 moonlight * uMoonStrength * 0.60;
 
             vec3 snowColor = vec3(0.88, 0.93, 0.96) * snowLight;
-            snowColor += vec3(0.015, 0.018, 0.020) * terrainNoise;
+            snowColor += vec3(0.06, 0.08, 0.10) * terrainNoise;
 
             litColor = mix(litColor, snowColor, snowMask);
 
@@ -1261,7 +1251,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
     private void CreateTerrainMesh()
     {
-        int resolution = 220;
+        int resolution = 160;
         float worldSize = 96f;
         float step = worldSize / resolution;
         float half = worldSize * 0.5f;
@@ -1473,4 +1463,3 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Dispose();
     }
 }
-

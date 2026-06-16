@@ -68,7 +68,7 @@ public sealed unsafe class WorldPrecipitationRenderer : IDisposable
         SetMatrix4(_viewLocation, view);
         SetMatrix4(_projectionLocation, projection);
 
-        _gl.Uniform1(_pointSizeLocation, isSnow ? 12.0f : 1.1f);
+        _gl.Uniform1(_pointSizeLocation, isSnow ? 9.0f : 1.1f);
         _gl.Uniform1(_isSnowLocation, isSnow ? 1.0f : 0.0f);
 
         _gl.Enable(EnableCap.Blend);
@@ -109,7 +109,7 @@ public sealed unsafe class WorldPrecipitationRenderer : IDisposable
         float windStrength,
         float weatherTime)
     {
-        float cellSize = isSnow ? 2.6f : 4.0f;
+        float cellSize = isSnow ? 3.2f : 4.0f;
         int radiusCells = isSnow ? 9 : 10;
 
         float topOffset = 28.0f;
@@ -150,7 +150,7 @@ public sealed unsafe class WorldPrecipitationRenderer : IDisposable
                 }
 
                 int dropsInCell = isSnow
-                    ? 8
+                    ? 5
                     : 3;
 
                 for (int i = 0; i < dropsInCell; i++)
@@ -371,6 +371,7 @@ public sealed unsafe class WorldPrecipitationRenderer : IDisposable
         }
     }
 }
+
 
 
 
