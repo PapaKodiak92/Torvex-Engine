@@ -212,37 +212,59 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
     private float GetTerrainHeight(float x, float z)
     {
-        float broadHills =
-            MathF.Sin(x * 0.16f) * 0.8f +
-            MathF.Cos(z * 0.13f) * 0.7f;
+        float rolling =
+            MathF.Sin(x * 0.055f) * 1.35f +
+            MathF.Cos(z * 0.050f) * 1.20f;
 
-        float smallerRolls =
-            MathF.Sin((x + z) * 0.34f) * 0.25f +
-            MathF.Cos((x - z) * 0.27f) * 0.20f;
+        float secondary =
+            MathF.Sin((x + z) * 0.115f) * 0.45f +
+            MathF.Cos((x - z) * 0.095f) * 0.35f;
 
-        float valley = -MathF.Exp(-(x * x + z * z) * 0.006f) * 0.65f;
+        float detail =
+            MathF.Sin(x * 0.31f + z * 0.14f) * 0.10f +
+            MathF.Cos(z * 0.27f - x * 0.11f) * 0.08f;
 
-        return broadHills + smallerRolls + valley;
+        float valley = -MathF.Exp(-(x * x + z * z) * 0.0018f) * 0.9f;
+
+        return rolling + secondary + detail + valley;
     }
 
     private Vector3 GetTerrainColor(float height)
     {
-        if (height < -0.65f)
+        Vector3 lowGrass = new(0.24f, 0.34f, 0.20f);
+        Vector3 grass = new(0.34f, 0.46f, 0.25f);
+        Vector3 highGrass = new(0.42f, 0.48f, 0.28f);
+        Vector3 dirt = new(0.42f, 0.36f, 0.28f);
+        Vector3 stone = new(0.42f, 0.42f, 0.40f);
+
+        if (height < -0.7f)
         {
-            return new Vector3(0.18f, 0.24f, 0.18f);
+            return Lerp(lowGrass, grass, SmoothStep(-1.8f, -0.7f, height));
         }
 
-        if (height < 0.35f)
+        if (height < 0.55f)
         {
-            return new Vector3(0.25f, 0.36f, 0.22f);
+            return Lerp(grass, highGrass, SmoothStep(-0.7f, 0.55f, height));
         }
 
-        if (height < 1.0f)
+        if (height < 1.45f)
         {
-            return new Vector3(0.36f, 0.42f, 0.26f);
+            return Lerp(highGrass, dirt, SmoothStep(0.55f, 1.45f, height));
         }
 
-        return new Vector3(0.42f, 0.38f, 0.32f);
+        return Lerp(dirt, stone, SmoothStep(1.45f, 2.4f, height));
+    }
+
+    private static Vector3 Lerp(Vector3 a, Vector3 b, float t)
+    {
+        t = Math.Clamp(t, 0f, 1f);
+        return a + (b - a) * t;
+    }
+
+    private static float SmoothStep(float edge0, float edge1, float value)
+    {
+        float t = Math.Clamp((value - edge0) / (edge1 - edge0), 0f, 1f);
+        return t * t * (3f - 2f * t);
     }
 
     private void SetViewport(Vector2D<int> size)
@@ -320,8 +342,8 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
     private void CreateTerrainMesh()
     {
-        int resolution = 96;
-        float worldSize = 64f;
+        int resolution = 160;
+        float worldSize = 96f;
         float step = worldSize / resolution;
         float half = worldSize * 0.5f;
 
