@@ -17,7 +17,7 @@ window.Loaded += () =>
     renderer.Initialize();
 
     Console.WriteLine("Stonewright loaded.");
-    Console.WriteLine("Controls: WASD move | Space/Ctrl vertical | Arrow keys look | Shift fast | ESC close");
+    Console.WriteLine("Controls: WASD move | Mouse look | F1 toggle mouse | Space/Ctrl vertical | Arrow keys look | Shift fast | T fast-forward day/moon cycle | F2 Clear | F3 Cloudy | F4 Foggy | F5 Rain | F6 Snow | F7 Storm | ESC close");
 };
 
 window.Updated += deltaTime =>
