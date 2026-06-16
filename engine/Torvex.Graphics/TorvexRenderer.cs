@@ -76,6 +76,16 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private Vector3 _cameraPosition = new(0f, 3.5f, 8f);
     private float _cameraYaw;
     private float _cameraPitch = -0.22f;
+    private const float PlayerEyeHeight = 1.72f;
+    private const float PlayerWalkSpeed = 4.6f;
+    private const float PlayerRunSpeed = 7.2f;
+    private const float PlayerJumpVelocity = 5.8f;
+    private const float Gravity = -18.0f;
+
+    private bool _walkMode = true;
+    private bool _wasVDown;
+    private bool _isGrounded = true;
+    private float _verticalVelocity;
 
     private const float FieldOfViewRadians = MathF.PI / 4f;
     private const float DayLengthSeconds = 180f;
@@ -129,6 +139,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         CreateTerrainShader();
         CreateTerrainMesh();
+        SnapPlayerToGround();
 
         ApplyWeatherPreset(WeatherType.Clear, false);
 
@@ -150,9 +161,27 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _cameraPitch -= mouseDelta.Y * mouseSensitivity;
 
         float lookSpeed = 1.8f;
+
+        bool vDown = input.IsKeyDown(Key.V);
+
+        if (vDown && !_wasVDown)
+        {
+            _walkMode = !_walkMode;
+
+            if (_walkMode)
+            {
+                _verticalVelocity = 0.0f;
+                SnapPlayerToGround();
+            }
+
+            Console.WriteLine($"Movement mode: {(_walkMode ? "Walk" : "Fly")}");
+        }
+
+        _wasVDown = vDown;
+
         float moveSpeed = input.IsKeyDown(Key.ShiftLeft) || input.IsKeyDown(Key.ShiftRight)
-            ? 12.0f
-            : 6.0f;
+            ? (_walkMode ? PlayerRunSpeed : 12.0f)
+            : (_walkMode ? PlayerWalkSpeed : 6.0f);
 
         if (input.IsKeyDown(Key.Left))
         {
@@ -177,36 +206,101 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _cameraPitch = Math.Clamp(_cameraPitch, -1.45f, 1.45f);
 
         Vector3 forward = GetCameraForward();
-        Vector3 right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitY));
 
-        if (input.IsKeyDown(Key.W))
+        if (_walkMode)
         {
-            _cameraPosition += forward * moveSpeed * dt;
+            Vector3 flatForward = new(forward.X, 0.0f, forward.Z);
+
+            if (flatForward.LengthSquared() < 0.0001f)
+            {
+                flatForward = new Vector3(0.0f, 0.0f, -1.0f);
+            }
+            else
+            {
+                flatForward = Vector3.Normalize(flatForward);
+            }
+
+            Vector3 flatRight = Vector3.Normalize(Vector3.Cross(flatForward, Vector3.UnitY));
+
+            Vector3 movement = Vector3.Zero;
+
+            if (input.IsKeyDown(Key.W))
+            {
+                movement += flatForward;
+            }
+
+            if (input.IsKeyDown(Key.S))
+            {
+                movement -= flatForward;
+            }
+
+            if (input.IsKeyDown(Key.D))
+            {
+                movement += flatRight;
+            }
+
+            if (input.IsKeyDown(Key.A))
+            {
+                movement -= flatRight;
+            }
+
+            if (movement.LengthSquared() > 0.0001f)
+            {
+                movement = Vector3.Normalize(movement);
+                _cameraPosition += movement * moveSpeed * dt;
+            }
+
+            if (_isGrounded && input.IsKeyDown(Key.Space))
+            {
+                _verticalVelocity = PlayerJumpVelocity;
+                _isGrounded = false;
+            }
+
+            _verticalVelocity += Gravity * dt;
+            _cameraPosition.Y += _verticalVelocity * dt;
+
+            float groundEyeHeight = GetPlayerGroundHeight(_cameraPosition.X, _cameraPosition.Z) + PlayerEyeHeight;
+
+            if (_cameraPosition.Y <= groundEyeHeight)
+            {
+                _cameraPosition.Y = groundEyeHeight;
+                _verticalVelocity = 0.0f;
+                _isGrounded = true;
+            }
         }
-
-        if (input.IsKeyDown(Key.S))
+        else
         {
-            _cameraPosition -= forward * moveSpeed * dt;
-        }
+            Vector3 right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitY));
 
-        if (input.IsKeyDown(Key.D))
-        {
-            _cameraPosition += right * moveSpeed * dt;
-        }
+            if (input.IsKeyDown(Key.W))
+            {
+                _cameraPosition += forward * moveSpeed * dt;
+            }
 
-        if (input.IsKeyDown(Key.A))
-        {
-            _cameraPosition -= right * moveSpeed * dt;
-        }
+            if (input.IsKeyDown(Key.S))
+            {
+                _cameraPosition -= forward * moveSpeed * dt;
+            }
 
-        if (input.IsKeyDown(Key.Space))
-        {
-            _cameraPosition += Vector3.UnitY * moveSpeed * dt;
-        }
+            if (input.IsKeyDown(Key.D))
+            {
+                _cameraPosition += right * moveSpeed * dt;
+            }
 
-        if (input.IsKeyDown(Key.ControlLeft) || input.IsKeyDown(Key.ControlRight))
-        {
-            _cameraPosition -= Vector3.UnitY * moveSpeed * dt;
+            if (input.IsKeyDown(Key.A))
+            {
+                _cameraPosition -= right * moveSpeed * dt;
+            }
+
+            if (input.IsKeyDown(Key.Space))
+            {
+                _cameraPosition += Vector3.UnitY * moveSpeed * dt;
+            }
+
+            if (input.IsKeyDown(Key.ControlLeft) || input.IsKeyDown(Key.ControlRight))
+            {
+                _cameraPosition -= Vector3.UnitY * moveSpeed * dt;
+            }
         }
 
         float timeScale = input.IsKeyDown(Key.T)
@@ -651,6 +745,37 @@ public sealed unsafe class TorvexRenderer : IDisposable
             MathF.Sin(_cameraPitch),
             -MathF.Cos(_cameraPitch) * MathF.Cos(_cameraYaw)
         ));
+    }
+
+    private void SnapPlayerToGround()
+    {
+        _cameraPosition.Y = GetPlayerGroundHeight(_cameraPosition.X, _cameraPosition.Z) + PlayerEyeHeight;
+        _verticalVelocity = 0.0f;
+        _isGrounded = true;
+    }
+
+    private float GetPlayerGroundHeight(float x, float z)
+    {
+        float terrainHeight = GetTerrainHeight(x, z);
+
+        Vector3 normal = GetTerrainNormal(x, z);
+        float upwardFacing = Math.Clamp(normal.Y, 0.0f, 1.0f);
+
+        float terrainNoise =
+            0.5f +
+            MathF.Sin(x * 0.080f) * 0.16f +
+            MathF.Sin(z * 0.070f) * 0.14f +
+            MathF.Sin((x + z) * 0.045f) * 0.10f;
+
+        terrainNoise = Math.Clamp(terrainNoise, 0.0f, 1.0f);
+
+        float slopeMask = SmoothStep(0.25f, 0.86f, upwardFacing);
+        float softBreakup = Lerp(0.97f, 1.03f, terrainNoise);
+
+        float snowMask = Math.Clamp(_snowAccumulation * slopeMask * softBreakup, 0.0f, 1.0f);
+        float snowDepth = Lerp(0.0f, 0.26f, SmoothStep(0.0f, 1.0f, _snowAccumulation));
+
+        return terrainHeight + snowMask * snowDepth;
     }
 
     private Vector3 GetSunDirection()
