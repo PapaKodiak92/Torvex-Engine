@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/engine/">
+    <Project Path="engine/Torvex.Core/Torvex.Core.csproj" />
+    <Project Path="engine/Torvex.Graphics/Torvex.Graphics.csproj" />
+    <Project Path="engine/Torvex.Platform/Torvex.Platform.csproj" />
+  </Folder>
+  <Folder Name="/games/" />
+  <Folder Name="/games/Stonewright/">
+    <Project Path="games/Stonewright/Stonewright.Client/Stonewright.Client.csproj" />
+  </Folder>
+</Solution>
