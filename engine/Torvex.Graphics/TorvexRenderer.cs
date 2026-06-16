@@ -12,14 +12,15 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private readonly IWindow _window;
     private GL? _gl;
 
-    private uint _testVertexArray;
-    private uint _testVertexBuffer;
-
     private uint _terrainVertexArray;
     private uint _terrainVertexBuffer;
     private int _terrainVertexCount;
 
-    private uint _shaderProgram;
+    private uint _skyVertexArray;
+    private uint _skyVertexBuffer;
+
+    private uint _terrainShaderProgram;
+    private uint _skyShaderProgram;
 
     private int _modelLocation;
     private int _viewLocation;
@@ -27,15 +28,23 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private int _lightDirectionLocation;
     private int _ambientLightLocation;
     private int _sunStrengthLocation;
+    private int _sunColorLocation;
     private int _fogColorLocation;
     private int _fogStartLocation;
     private int _fogEndLocation;
 
+    private int _skyTopColorLocation;
+    private int _skyHorizonColorLocation;
+    private int _skySunColorLocation;
+    private int _skySunPositionLocation;
+
     private Vector3 _cameraPosition = new(0f, 3.5f, 8f);
     private float _cameraYaw;
     private float _cameraPitch = -0.22f;
+    private const float FieldOfViewRadians = MathF.PI / 4f;
+    private const float DayLengthSeconds = 180f;
 
-    private float _time;
+    private float _timeOfDay = 0.38f;
 
     public TorvexRenderer(IWindow window)
     {
@@ -49,17 +58,19 @@ public sealed unsafe class TorvexRenderer : IDisposable
         SetViewport(_window.FramebufferSize);
         _window.FramebufferResize += SetViewport;
 
-        _gl.ClearColor(0.46f, 0.62f, 0.82f, 1.0f);
+        _gl.ClearColor(0.58f, 0.72f, 0.88f, 1.0f);
         _gl.Enable(EnableCap.DepthTest);
         _gl.Disable(EnableCap.CullFace);
 
-        CreateShader();
-        //CreateTestMesh();
+        CreateSkyShader();
+        CreateSkyMesh();
+
+        CreateTerrainShader();
         CreateTerrainMesh();
 
         Console.WriteLine($"Graphics initialized. Framebuffer: {_window.FramebufferSize.X}x{_window.FramebufferSize.Y}");
         Console.WriteLine($"Terrain mesh generated. Vertices: {_terrainVertexCount}");
-        Console.WriteLine("Sun lighting enabled.");
+        Console.WriteLine("Sky gradient and warm sunlight enabled.");
     }
 
     public void Update(double deltaTime, TorvexWindow input)
@@ -132,6 +143,12 @@ public sealed unsafe class TorvexRenderer : IDisposable
         {
             _cameraPosition -= Vector3.UnitY * moveSpeed * dt;
         }
+
+        float timeScale = input.IsKeyDown(Key.T)
+            ? 20.0f
+            : 1.0f;
+
+        _timeOfDay = Wrap01(_timeOfDay + dt / DayLengthSeconds * timeScale);
     }
 
     public void Render(double deltaTime)
@@ -141,13 +158,13 @@ public sealed unsafe class TorvexRenderer : IDisposable
             return;
         }
 
-        _time += (float)deltaTime;
-
         _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
         float aspectRatio = MathF.Max(1f, _window.FramebufferSize.X) / MathF.Max(1f, _window.FramebufferSize.Y);
 
         Vector3 cameraForward = GetCameraForward();
+        Vector3 cameraRight = Vector3.Normalize(Vector3.Cross(cameraForward, Vector3.UnitY));
+        Vector3 cameraUp = Vector3.Normalize(Vector3.Cross(cameraRight, cameraForward));
 
         Matrix4x4 view = Matrix4x4.CreateLookAt(
             _cameraPosition,
@@ -156,31 +173,82 @@ public sealed unsafe class TorvexRenderer : IDisposable
         );
 
         Matrix4x4 projection = Matrix4x4.CreatePerspectiveFieldOfView(
-            MathF.PI / 4f,
+            FieldOfViewRadians,
             aspectRatio,
             0.1f,
             1000f
         );
 
-        Vector3 lightDirection = Vector3.Normalize(new Vector3(-0.35f, -0.85f, -0.45f));
+        Vector3 sunDirection = GetSunDirection();
+        float sunElevation = sunDirection.Y;
 
-        _gl.UseProgram(_shaderProgram);
+        Vector3 lightDirection = -sunDirection;
+        Vector3 sunColor = GetSunColor(sunElevation);
+        Vector3 fogColor = GetSkyHorizonColor(sunElevation);
+
+        float daylightAmount = SmoothStep(-0.05f, 0.35f, sunElevation);
+        float ambientLight = Lerp(0.08f, 0.35f, daylightAmount);
+        float sunStrength = Lerp(0.0f, 0.88f, daylightAmount);
+
+        DrawSky(cameraForward, cameraRight, cameraUp, sunDirection, sunColor, aspectRatio);
+
+        _gl.UseProgram(_terrainShaderProgram);
 
         SetMatrix4(_viewLocation, view);
         SetMatrix4(_projectionLocation, projection);
+        SetMatrix4(_modelLocation, Matrix4x4.Identity);
 
         _gl.Uniform3(_lightDirectionLocation, lightDirection.X, lightDirection.Y, lightDirection.Z);
-        _gl.Uniform1(_ambientLightLocation, 0.34f);
-        _gl.Uniform1(_sunStrengthLocation, 0.82f);
-
-        Vector3 fogColor = new(0.46f, 0.62f, 0.82f);
+        _gl.Uniform1(_ambientLightLocation, ambientLight);
+        _gl.Uniform1(_sunStrengthLocation, sunStrength);
+        _gl.Uniform3(_sunColorLocation, sunColor.X, sunColor.Y, sunColor.Z);
 
         _gl.Uniform3(_fogColorLocation, fogColor.X, fogColor.Y, fogColor.Z);
-        _gl.Uniform1(_fogStartLocation, 38.0f);
-        _gl.Uniform1(_fogEndLocation, 115.0f);
+        _gl.Uniform1(_fogStartLocation, 42.0f);
+        _gl.Uniform1(_fogEndLocation, 135.0f);
 
         DrawTerrain();
-        //DrawTestMesh();
+    }
+
+    private void DrawSky(
+    Vector3 cameraForward,
+    Vector3 cameraRight,
+    Vector3 cameraUp,
+    Vector3 sunDirection,
+    Vector3 sunColor,
+    float aspectRatio)
+    {
+        if (_gl is null)
+        {
+            return;
+        }
+
+        _gl.Disable(EnableCap.DepthTest);
+
+        float sunElevation = sunDirection.Y;
+
+        Vector3 topColor = GetSkyTopColor(sunElevation);
+        Vector3 horizonColor = GetSkyHorizonColor(sunElevation);
+        Vector2 sunScreenPosition = ProjectDirectionToSkyUv(
+            sunDirection,
+            cameraForward,
+            cameraRight,
+            cameraUp,
+            aspectRatio
+        );
+
+        _gl.UseProgram(_skyShaderProgram);
+
+        _gl.Uniform3(_skyTopColorLocation, topColor.X, topColor.Y, topColor.Z);
+        _gl.Uniform3(_skyHorizonColorLocation, horizonColor.X, horizonColor.Y, horizonColor.Z);
+        _gl.Uniform3(_skySunColorLocation, sunColor.X, sunColor.Y, sunColor.Z);
+        _gl.Uniform2(_skySunPositionLocation, sunScreenPosition.X, sunScreenPosition.Y);
+
+        _gl.BindVertexArray(_skyVertexArray);
+        _gl.DrawArrays(PrimitiveType.Triangles, 0, 3);
+        _gl.BindVertexArray(0);
+
+        _gl.Enable(EnableCap.DepthTest);
     }
 
     private void DrawTerrain()
@@ -190,33 +258,8 @@ public sealed unsafe class TorvexRenderer : IDisposable
             return;
         }
 
-        SetMatrix4(_modelLocation, Matrix4x4.Identity);
-
         _gl.BindVertexArray(_terrainVertexArray);
         _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_terrainVertexCount);
-        _gl.BindVertexArray(0);
-    }
-
-    private void DrawTestMesh()
-    {
-        if (_gl is null)
-        {
-            return;
-        }
-
-        float markerX = 0f;
-        float markerZ = 0f;
-        float markerY = GetTerrainHeight(markerX, markerZ) + 0.65f;
-
-        Matrix4x4 model =
-            Matrix4x4.CreateScale(1.2f, 1.0f, 1.2f) *
-            Matrix4x4.CreateRotationY(_time * 0.45f) *
-            Matrix4x4.CreateTranslation(markerX, markerY, markerZ);
-
-        SetMatrix4(_modelLocation, model);
-
-        _gl.BindVertexArray(_testVertexArray);
-        _gl.DrawArrays(PrimitiveType.Triangles, 0, 36);
         _gl.BindVertexArray(0);
     }
 
@@ -300,7 +343,82 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Viewport(0, 0, (uint)Math.Max(1, size.X), (uint)Math.Max(1, size.Y));
     }
 
-    private void CreateShader()
+    private void CreateSkyShader()
+    {
+        if (_gl is null)
+        {
+            throw new InvalidOperationException("OpenGL has not been initialized.");
+        }
+
+        const string vertexShaderSource = """
+        #version 330 core
+
+        layout (location = 0) in vec2 aPosition;
+
+        out vec2 screenUv;
+
+        void main()
+        {
+            screenUv = aPosition * 0.5 + 0.5;
+            gl_Position = vec4(aPosition, 0.0, 1.0);
+        }
+        """;
+
+        const string fragmentShaderSource = """
+        #version 330 core
+
+        in vec2 screenUv;
+
+        uniform vec3 uSkyTopColor;
+        uniform vec3 uSkyHorizonColor;
+        uniform vec3 uSkySunColor;
+        uniform vec2 uSkySunPosition;
+
+        out vec4 FragColor;
+
+        void main()
+        {
+            float heightBlend = smoothstep(0.0, 1.0, clamp(screenUv.y, 0.0, 1.0));
+            vec3 skyColor = mix(uSkyHorizonColor, uSkyTopColor, heightBlend);
+
+            float sunDistance = distance(screenUv, uSkySunPosition);
+            float sunGlow = exp(-sunDistance * 13.0) * 0.55;
+            float horizonWarmth = exp(-abs(screenUv.y - 0.43) * 8.0) * 0.16;
+
+            skyColor += uSkySunColor * sunGlow;
+            skyColor += vec3(1.0, 0.62, 0.28) * horizonWarmth;
+
+            FragColor = vec4(skyColor, 1.0);
+        }
+        """;
+
+        uint vertexShader = CompileShader(ShaderType.VertexShader, vertexShaderSource);
+        uint fragmentShader = CompileShader(ShaderType.FragmentShader, fragmentShaderSource);
+
+        _skyShaderProgram = _gl.CreateProgram();
+        _gl.AttachShader(_skyShaderProgram, vertexShader);
+        _gl.AttachShader(_skyShaderProgram, fragmentShader);
+        _gl.LinkProgram(_skyShaderProgram);
+
+        _gl.GetProgram(_skyShaderProgram, ProgramPropertyARB.LinkStatus, out int linkStatus);
+        if (linkStatus == 0)
+        {
+            string infoLog = _gl.GetProgramInfoLog(_skyShaderProgram);
+            throw new InvalidOperationException($"Sky shader program link failed: {infoLog}");
+        }
+
+        _gl.DetachShader(_skyShaderProgram, vertexShader);
+        _gl.DetachShader(_skyShaderProgram, fragmentShader);
+        _gl.DeleteShader(vertexShader);
+        _gl.DeleteShader(fragmentShader);
+
+        _skyTopColorLocation = _gl.GetUniformLocation(_skyShaderProgram, "uSkyTopColor");
+        _skyHorizonColorLocation = _gl.GetUniformLocation(_skyShaderProgram, "uSkyHorizonColor");
+        _skySunColorLocation = _gl.GetUniformLocation(_skyShaderProgram, "uSkySunColor");
+        _skySunPositionLocation = _gl.GetUniformLocation(_skyShaderProgram, "uSkySunPosition");
+    }
+
+    private void CreateTerrainShader()
     {
         if (_gl is null)
         {
@@ -345,6 +463,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
         uniform vec3 uLightDirection;
         uniform float uAmbientLight;
         uniform float uSunStrength;
+        uniform vec3 uSunColor;
 
         uniform vec3 uFogColor;
         uniform float uFogStart;
@@ -357,8 +476,10 @@ public sealed unsafe class TorvexRenderer : IDisposable
             vec3 normal = normalize(vertexNormal);
             float sunlight = max(dot(normal, -uLightDirection), 0.0);
 
-            float lightAmount = uAmbientLight + sunlight * uSunStrength;
-            vec3 litColor = vertexColor * lightAmount;
+            vec3 ambient = vertexColor * uAmbientLight;
+            vec3 directSun = vertexColor * uSunColor * sunlight * uSunStrength;
+
+            vec3 litColor = ambient + directSun;
 
             float fogAmount = clamp((vertexFogDepth - uFogStart) / (uFogEnd - uFogStart), 0.0, 1.0);
             fogAmount = fogAmount * fogAmount * (3.0 - 2.0 * fogAmount);
@@ -372,34 +493,74 @@ public sealed unsafe class TorvexRenderer : IDisposable
         uint vertexShader = CompileShader(ShaderType.VertexShader, vertexShaderSource);
         uint fragmentShader = CompileShader(ShaderType.FragmentShader, fragmentShaderSource);
 
-        _shaderProgram = _gl.CreateProgram();
-        _gl.AttachShader(_shaderProgram, vertexShader);
-        _gl.AttachShader(_shaderProgram, fragmentShader);
-        _gl.LinkProgram(_shaderProgram);
+        _terrainShaderProgram = _gl.CreateProgram();
+        _gl.AttachShader(_terrainShaderProgram, vertexShader);
+        _gl.AttachShader(_terrainShaderProgram, fragmentShader);
+        _gl.LinkProgram(_terrainShaderProgram);
 
-        _gl.GetProgram(_shaderProgram, ProgramPropertyARB.LinkStatus, out int linkStatus);
+        _gl.GetProgram(_terrainShaderProgram, ProgramPropertyARB.LinkStatus, out int linkStatus);
         if (linkStatus == 0)
         {
-            string infoLog = _gl.GetProgramInfoLog(_shaderProgram);
-            throw new InvalidOperationException($"Shader program link failed: {infoLog}");
+            string infoLog = _gl.GetProgramInfoLog(_terrainShaderProgram);
+            throw new InvalidOperationException($"Terrain shader program link failed: {infoLog}");
         }
 
-        _gl.DetachShader(_shaderProgram, vertexShader);
-        _gl.DetachShader(_shaderProgram, fragmentShader);
+        _gl.DetachShader(_terrainShaderProgram, vertexShader);
+        _gl.DetachShader(_terrainShaderProgram, fragmentShader);
         _gl.DeleteShader(vertexShader);
         _gl.DeleteShader(fragmentShader);
 
-        _modelLocation = _gl.GetUniformLocation(_shaderProgram, "uModel");
-        _viewLocation = _gl.GetUniformLocation(_shaderProgram, "uView");
-        _projectionLocation = _gl.GetUniformLocation(_shaderProgram, "uProjection");
+        _modelLocation = _gl.GetUniformLocation(_terrainShaderProgram, "uModel");
+        _viewLocation = _gl.GetUniformLocation(_terrainShaderProgram, "uView");
+        _projectionLocation = _gl.GetUniformLocation(_terrainShaderProgram, "uProjection");
 
-        _lightDirectionLocation = _gl.GetUniformLocation(_shaderProgram, "uLightDirection");
-        _ambientLightLocation = _gl.GetUniformLocation(_shaderProgram, "uAmbientLight");
-        _sunStrengthLocation = _gl.GetUniformLocation(_shaderProgram, "uSunStrength");
+        _lightDirectionLocation = _gl.GetUniformLocation(_terrainShaderProgram, "uLightDirection");
+        _ambientLightLocation = _gl.GetUniformLocation(_terrainShaderProgram, "uAmbientLight");
+        _sunStrengthLocation = _gl.GetUniformLocation(_terrainShaderProgram, "uSunStrength");
+        _sunColorLocation = _gl.GetUniformLocation(_terrainShaderProgram, "uSunColor");
 
-        _fogColorLocation = _gl.GetUniformLocation(_shaderProgram, "uFogColor");
-        _fogStartLocation = _gl.GetUniformLocation(_shaderProgram, "uFogStart");
-        _fogEndLocation = _gl.GetUniformLocation(_shaderProgram, "uFogEnd");
+        _fogColorLocation = _gl.GetUniformLocation(_terrainShaderProgram, "uFogColor");
+        _fogStartLocation = _gl.GetUniformLocation(_terrainShaderProgram, "uFogStart");
+        _fogEndLocation = _gl.GetUniformLocation(_terrainShaderProgram, "uFogEnd");
+    }
+
+    private void CreateSkyMesh()
+    {
+        float[] vertices =
+        [
+            -1f, -1f,
+             3f, -1f,
+            -1f,  3f,
+        ];
+
+        if (_gl is null)
+        {
+            throw new InvalidOperationException("OpenGL has not been initialized.");
+        }
+
+        _skyVertexArray = _gl.GenVertexArray();
+        _skyVertexBuffer = _gl.GenBuffer();
+
+        _gl.BindVertexArray(_skyVertexArray);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _skyVertexBuffer);
+
+        fixed (float* vertexData = vertices)
+        {
+            _gl.BufferData(
+                BufferTargetARB.ArrayBuffer,
+                (nuint)(vertices.Length * sizeof(float)),
+                vertexData,
+                BufferUsageARB.StaticDraw
+            );
+        }
+
+        const uint stride = 2 * sizeof(float);
+
+        _gl.EnableVertexAttribArray(0);
+        _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, stride, (void*)0);
+
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        _gl.BindVertexArray(0);
     }
 
     private void CreateTerrainMesh()
@@ -427,7 +588,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         _terrainVertexCount = vertices.Count / 9;
 
-        CreateVertexObjects(vertices.ToArray(), out _terrainVertexArray, out _terrainVertexBuffer);
+        CreateTerrainVertexObjects(vertices.ToArray());
     }
 
     private void AddTerrainTriangle(List<float> vertices, float ax, float az, float bx, float bz, float cx, float cz)
@@ -446,85 +607,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
         AddVertex(vertices, new Vector3(x, y, z), normal, color);
     }
 
-    private void CreateTestMesh()
-    {
-        List<float> vertices = [];
-
-        Vector3 brown = new(0.68f, 0.48f, 0.30f);
-        Vector3 tan = new(0.78f, 0.62f, 0.38f);
-        Vector3 green = new(0.46f, 0.58f, 0.36f);
-        Vector3 blueGray = new(0.34f, 0.40f, 0.52f);
-        Vector3 dark = new(0.18f, 0.18f, 0.20f);
-
-        AddFace(vertices,
-            new Vector3(-0.5f, -0.5f, 0.5f),
-            new Vector3(0.5f, -0.5f, 0.5f),
-            new Vector3(0.5f, 0.5f, 0.5f),
-            new Vector3(-0.5f, 0.5f, 0.5f),
-            new Vector3(0f, 0f, 1f),
-            tan);
-
-        AddFace(vertices,
-            new Vector3(0.5f, -0.5f, -0.5f),
-            new Vector3(-0.5f, -0.5f, -0.5f),
-            new Vector3(-0.5f, 0.5f, -0.5f),
-            new Vector3(0.5f, 0.5f, -0.5f),
-            new Vector3(0f, 0f, -1f),
-            dark);
-
-        AddFace(vertices,
-            new Vector3(-0.5f, -0.5f, -0.5f),
-            new Vector3(-0.5f, -0.5f, 0.5f),
-            new Vector3(-0.5f, 0.5f, 0.5f),
-            new Vector3(-0.5f, 0.5f, -0.5f),
-            new Vector3(-1f, 0f, 0f),
-            green);
-
-        AddFace(vertices,
-            new Vector3(0.5f, -0.5f, 0.5f),
-            new Vector3(0.5f, -0.5f, -0.5f),
-            new Vector3(0.5f, 0.5f, -0.5f),
-            new Vector3(0.5f, 0.5f, 0.5f),
-            new Vector3(1f, 0f, 0f),
-            blueGray);
-
-        AddFace(vertices,
-            new Vector3(-0.5f, 0.5f, 0.5f),
-            new Vector3(0.5f, 0.5f, 0.5f),
-            new Vector3(0.5f, 0.5f, -0.5f),
-            new Vector3(-0.5f, 0.5f, -0.5f),
-            new Vector3(0f, 1f, 0f),
-            tan);
-
-        AddFace(vertices,
-            new Vector3(-0.5f, -0.5f, -0.5f),
-            new Vector3(0.5f, -0.5f, -0.5f),
-            new Vector3(0.5f, -0.5f, 0.5f),
-            new Vector3(-0.5f, -0.5f, 0.5f),
-            new Vector3(0f, -1f, 0f),
-            brown);
-
-        CreateVertexObjects(vertices.ToArray(), out _testVertexArray, out _testVertexBuffer);
-    }
-
-    private static void AddFace(
-        List<float> vertices,
-        Vector3 a,
-        Vector3 b,
-        Vector3 c,
-        Vector3 d,
-        Vector3 normal,
-        Vector3 color)
-    {
-        AddVertex(vertices, a, normal, color);
-        AddVertex(vertices, b, normal, color);
-        AddVertex(vertices, c, normal, color);
-
-        AddVertex(vertices, c, normal, color);
-        AddVertex(vertices, d, normal, color);
-        AddVertex(vertices, a, normal, color);
-    }
-
     private static void AddVertex(List<float> vertices, Vector3 position, Vector3 normal, Vector3 color)
     {
         vertices.Add(position.X);
@@ -540,18 +622,18 @@ public sealed unsafe class TorvexRenderer : IDisposable
         vertices.Add(color.Z);
     }
 
-    private void CreateVertexObjects(float[] vertices, out uint vertexArray, out uint vertexBuffer)
+    private void CreateTerrainVertexObjects(float[] vertices)
     {
         if (_gl is null)
         {
             throw new InvalidOperationException("OpenGL has not been initialized.");
         }
 
-        vertexArray = _gl.GenVertexArray();
-        vertexBuffer = _gl.GenBuffer();
+        _terrainVertexArray = _gl.GenVertexArray();
+        _terrainVertexBuffer = _gl.GenBuffer();
 
-        _gl.BindVertexArray(vertexArray);
-        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, vertexBuffer);
+        _gl.BindVertexArray(_terrainVertexArray);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _terrainVertexBuffer);
 
         fixed (float* vertexData = vertices)
         {
@@ -599,6 +681,101 @@ public sealed unsafe class TorvexRenderer : IDisposable
         }
     }
 
+    private Vector3 GetSunDirection()
+    {
+        // timeOfDay:
+        // 0.25 = sunrise in the east
+        // 0.50 = noon
+        // 0.75 = sunset in the west
+        float angle = (_timeOfDay - 0.25f) * MathF.Tau;
+
+        return Vector3.Normalize(new Vector3(
+            MathF.Cos(angle),
+            MathF.Sin(angle),
+            -0.22f
+        ));
+    }
+
+    private Vector2 ProjectDirectionToSkyUv(
+        Vector3 worldDirection,
+        Vector3 cameraForward,
+        Vector3 cameraRight,
+        Vector3 cameraUp,
+        float aspectRatio)
+    {
+        float forwardDepth = Vector3.Dot(worldDirection, cameraForward);
+
+        if (forwardDepth <= 0.001f)
+        {
+            return new Vector2(-10f, -10f);
+        }
+
+        float rightAmount = Vector3.Dot(worldDirection, cameraRight);
+        float upAmount = Vector3.Dot(worldDirection, cameraUp);
+
+        float projectionScale = 1.0f / MathF.Tan(FieldOfViewRadians * 0.5f);
+
+        float ndcX = (rightAmount * projectionScale / aspectRatio) / forwardDepth;
+        float ndcY = (upAmount * projectionScale) / forwardDepth;
+
+        return new Vector2(
+            ndcX * 0.5f + 0.5f,
+            ndcY * 0.5f + 0.5f
+        );
+    }
+
+    private static Vector3 GetSunColor(float elevation)
+    {
+        Vector3 sunriseColor = new(1.0f, 0.58f, 0.24f);
+        Vector3 noonColor = new(1.0f, 0.88f, 0.62f);
+
+        float noonAmount = SmoothStep(0.05f, 0.65f, elevation);
+
+        return Lerp(sunriseColor, noonColor, noonAmount);
+    }
+
+    private static Vector3 GetSkyTopColor(float elevation)
+    {
+        Vector3 nightTop = new(0.015f, 0.025f, 0.055f);
+        Vector3 dayTop = new(0.25f, 0.47f, 0.76f);
+
+        float daylightAmount = SmoothStep(-0.08f, 0.35f, elevation);
+
+        return Lerp(nightTop, dayTop, daylightAmount);
+    }
+
+    private static Vector3 GetSkyHorizonColor(float elevation)
+    {
+        Vector3 nightHorizon = new(0.035f, 0.045f, 0.075f);
+        Vector3 sunriseHorizon = new(0.82f, 0.50f, 0.28f);
+        Vector3 dayHorizon = new(0.62f, 0.74f, 0.86f);
+
+        float daylightAmount = SmoothStep(-0.08f, 0.35f, elevation);
+        float noonAmount = SmoothStep(0.15f, 0.65f, elevation);
+
+        Vector3 dawnToDay = Lerp(sunriseHorizon, dayHorizon, noonAmount);
+
+        return Lerp(nightHorizon, dawnToDay, daylightAmount);
+    }
+
+    private static float Lerp(float a, float b, float t)
+    {
+        t = Math.Clamp(t, 0f, 1f);
+        return a + (b - a) * t;
+    }
+
+    private static float Wrap01(float value)
+    {
+        value %= 1.0f;
+
+        if (value < 0.0f)
+        {
+            value += 1.0f;
+        }
+
+        return value;
+    }
+
     private uint CompileShader(ShaderType shaderType, string source)
     {
         if (_gl is null)
@@ -641,16 +818,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         _window.FramebufferResize -= SetViewport;
 
-        if (_testVertexBuffer != 0)
-        {
-            _gl.DeleteBuffer(_testVertexBuffer);
-        }
-
-        if (_testVertexArray != 0)
-        {
-            _gl.DeleteVertexArray(_testVertexArray);
-        }
-
         if (_terrainVertexBuffer != 0)
         {
             _gl.DeleteBuffer(_terrainVertexBuffer);
@@ -661,9 +828,24 @@ public sealed unsafe class TorvexRenderer : IDisposable
             _gl.DeleteVertexArray(_terrainVertexArray);
         }
 
-        if (_shaderProgram != 0)
+        if (_skyVertexBuffer != 0)
         {
-            _gl.DeleteProgram(_shaderProgram);
+            _gl.DeleteBuffer(_skyVertexBuffer);
+        }
+
+        if (_skyVertexArray != 0)
+        {
+            _gl.DeleteVertexArray(_skyVertexArray);
+        }
+
+        if (_terrainShaderProgram != 0)
+        {
+            _gl.DeleteProgram(_terrainShaderProgram);
+        }
+
+        if (_skyShaderProgram != 0)
+        {
+            _gl.DeleteProgram(_skyShaderProgram);
         }
 
         _gl.Dispose();
