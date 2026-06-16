@@ -23,6 +23,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private GL? _gl;
 
     private WorldPrecipitationRenderer? _worldPrecipitationRenderer;
+    private SnowSurfaceRenderer? _snowSurfaceRenderer;
 
     private uint _terrainVertexArray;
     private uint _terrainVertexBuffer;
@@ -119,6 +120,9 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         _worldPrecipitationRenderer = new WorldPrecipitationRenderer(_gl);
         _worldPrecipitationRenderer.Initialize();
+
+        _snowSurfaceRenderer = new SnowSurfaceRenderer(_gl, GetTerrainHeight, GetTerrainNormal);
+        _snowSurfaceRenderer.Initialize();
 
         CreateSkyShader();
         // CreatePrecipitationShader(); // disabled: old screen-space precipitation overlay
@@ -336,6 +340,13 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Uniform1(_fogEndLocation, Lerp(170.0f, 38.0f, effectiveFog));
 
         DrawTerrain();
+
+        _snowSurfaceRenderer?.Render(
+            view,
+            projection,
+            _snowAccumulation,
+            _weatherTime
+        );
         _worldPrecipitationRenderer?.Render(
             _cameraPosition,
             cameraForward,
@@ -1426,6 +1437,7 @@ _windStrength = 0.35f;
         _window.FramebufferResize -= SetViewport;
 
         _worldPrecipitationRenderer?.Dispose();
+        _snowSurfaceRenderer?.Dispose();
         _worldPrecipitationRenderer = null;
 
         if (_terrainVertexBuffer != 0)
@@ -1466,7 +1478,6 @@ _windStrength = 0.35f;
         _gl.Dispose();
     }
 }
-
 
 
 
