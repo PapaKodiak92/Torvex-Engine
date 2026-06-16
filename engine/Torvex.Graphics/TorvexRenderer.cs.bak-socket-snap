@@ -101,14 +101,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private bool _buildVerticalMode;
     private float _buildHeightOffset;
 
-    private bool _buildSnapEnabled = true;
-    private bool _wasTabDown;
-    private bool _wasNDown;
-    private int _selectedPreviewSocketIndex = 2;
-
-    private bool _hasBuildYawOverride;
-    private float _buildYawOverride;
-
     private readonly List<PlacedConstructionPiece> _placedConstructionPieces = [];
     private bool _wasLeftMouseDown;
     private bool _wasRightMouseDown;
@@ -494,7 +486,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
                 view,
                 projection,
                 GetSnappedBuildPosition(_terrainTargetPoint),
-                GetEffectiveBuildYaw(),
+                _buildYaw,
                 _buildVerticalMode,
                 true,
                 _weatherTime
@@ -855,7 +847,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
             _placedConstructionPieces.Add(new PlacedConstructionPiece(
                 buildPosition,
-                GetEffectiveBuildYaw(),
+                _buildYaw,
                 _buildVerticalMode
             ));
 
@@ -901,36 +893,10 @@ public sealed unsafe class TorvexRenderer : IDisposable
         if (xDown && !_wasXDown)
         {
             _buildVerticalMode = !_buildVerticalMode;
-            _selectedPreviewSocketIndex = GetDefaultPreviewSocketIndex();
-            Console.WriteLine($"Build orientation: {(_buildVerticalMode ? "Vertical Post" : "Horizontal Beam")} | Socket: {GetSelectedPreviewSocketName()}");
+            Console.WriteLine($"Build orientation: {(_buildVerticalMode ? "Vertical Post" : "Horizontal Beam")}");
         }
 
         _wasXDown = xDown;
-
-        bool tabDown = input.IsKeyDown(Key.Tab);
-
-        if (tabDown && !_wasTabDown)
-        {
-            List<ConstructionPreviewSocket> sockets = GetPreviewSockets(_buildYaw, _buildVerticalMode);
-
-            if (sockets.Count > 0)
-            {
-                _selectedPreviewSocketIndex = (_selectedPreviewSocketIndex + 1) % sockets.Count;
-                Console.WriteLine($"Preview socket: {GetSelectedPreviewSocketName()}");
-            }
-        }
-
-        _wasTabDown = tabDown;
-
-        bool nDown = input.IsKeyDown(Key.N);
-
-        if (nDown && !_wasNDown)
-        {
-            _buildSnapEnabled = !_buildSnapEnabled;
-            Console.WriteLine($"Build snapping: {(_buildSnapEnabled ? "On" : "Off")}");
-        }
-
-        _wasNDown = nDown;
 
         if (input.IsKeyDown(Key.C))
         {
@@ -970,30 +936,21 @@ public sealed unsafe class TorvexRenderer : IDisposable
         }
     }
 
-    private enum ConstructionSocketRole
+    private enum BuildSnapAnchorKind
     {
         BeamEnd,
-        BeamBottom,
-        BeamTop,
         PostBottom,
         PostTop
     }
 
-    private readonly record struct ConstructionWorldSocket(
+    private readonly record struct BuildSnapAnchor(
         Vector3 Position,
-        ConstructionSocketRole Role,
-        string Name
-    );
-
-    private readonly record struct ConstructionPreviewSocket(
-        Vector3 LocalPosition,
-        ConstructionSocketRole Role,
-        string Name
+        BuildSnapAnchorKind Kind
     );
 
     private Vector3 GetSnappedBuildPosition(Vector3 targetPoint)
     {
-        _hasBuildYawOverride = false;
+        const float snapRadius = 0.95f;
 
         Vector3 freePosition = targetPoint + new Vector3(0.0f, _buildHeightOffset, 0.0f);
 
@@ -1002,182 +959,74 @@ public sealed unsafe class TorvexRenderer : IDisposable
             freePosition.Y = GetPlayerGroundHeight(freePosition.X, freePosition.Z);
         }
 
-        if (!_buildSnapEnabled || _placedConstructionPieces.Count == 0)
+        if (_placedConstructionPieces.Count == 0)
         {
             return freePosition;
         }
 
-        float effectiveYaw = GetEffectiveBuildYaw();
-        List<ConstructionPreviewSocket> previewSockets = GetPreviewSockets(effectiveYaw, _buildVerticalMode);
-
-        if (previewSockets.Count == 0)
+        if (TryGetViewedSnapAnchor(out BuildSnapAnchor viewedAnchor))
         {
-            return freePosition;
+            return GetBestPreviewPositionForAnchor(viewedAnchor, freePosition);
         }
 
-        if (_selectedPreviewSocketIndex < 0 || _selectedPreviewSocketIndex >= previewSockets.Count)
+        Vector3 bestPosition = freePosition;
+        float bestDistanceSquared = snapRadius * snapRadius;
+
+        foreach (PlacedConstructionPiece existingPiece in _placedConstructionPieces)
         {
-            _selectedPreviewSocketIndex = GetDefaultPreviewSocketIndex();
-        }
-
-        ConstructionPreviewSocket selectedSocket = previewSockets[_selectedPreviewSocketIndex];
-
-        if (!TryGetViewedConstructionSocket(selectedSocket, out ConstructionWorldSocket targetSocket) &&
-            !TryGetNearestConstructionSocket(freePosition, selectedSocket, out targetSocket))
-        {
-            return freePosition;
-        }
-
-        if (!AreSocketsCompatible(targetSocket.Role, selectedSocket.Role))
-        {
-            return freePosition;
-        }
-
-        if (TryResolveBeamSpanPlacement(targetSocket, selectedSocket, out Vector3 spanPosition, out float spanYaw))
-        {
-            _hasBuildYawOverride = true;
-            _buildYawOverride = spanYaw;
-            return spanPosition;
-        }
-
-        Vector3 snappedPosition = targetSocket.Position - selectedSocket.LocalPosition;
-
-        // Critical rule:
-        // Beam bottom sockets sit directly on support sockets.
-        if (!_buildVerticalMode &&
-            selectedSocket.Role == ConstructionSocketRole.BeamBottom &&
-            targetSocket.Role == ConstructionSocketRole.PostTop)
-        {
-            snappedPosition.Y = targetSocket.Position.Y;
-        }
-
-        // Critical rule:
-        // Post bottom sits directly on beam top/end sockets.
-        if (_buildVerticalMode &&
-            selectedSocket.Role == ConstructionSocketRole.PostBottom &&
-            (targetSocket.Role == ConstructionSocketRole.BeamTop ||
-             targetSocket.Role == ConstructionSocketRole.BeamEnd))
-        {
-            snappedPosition.Y = targetSocket.Position.Y;
-        }
-
-        return snappedPosition;
-    }
-
-    private bool TryResolveBeamSpanPlacement(
-        ConstructionWorldSocket targetSocket,
-        ConstructionPreviewSocket selectedSocket,
-        out Vector3 spanPosition,
-        out float spanYaw)
-    {
-        spanPosition = Vector3.Zero;
-        spanYaw = GetEffectiveBuildYaw();
-
-        if (_buildVerticalMode)
-        {
-            return false;
-        }
-
-        if (targetSocket.Role != ConstructionSocketRole.PostTop ||
-            selectedSocket.Role != ConstructionSocketRole.BeamBottom)
-        {
-            return false;
-        }
-
-        const float beamHalfLength = 1.55f;
-        const float beamLength = beamHalfLength * 2.0f;
-        const float maxLengthError = 0.55f;
-
-        ConstructionWorldSocket bestOtherPost = default;
-        float bestScore = float.MaxValue;
-        bool found = false;
-
-        Vector3 preferredForward = GetBuildForward(GetEffectiveBuildYaw());
-
-        foreach (PlacedConstructionPiece piece in _placedConstructionPieces)
-        {
-            foreach (ConstructionWorldSocket socket in GetPieceSockets(piece))
+            foreach (BuildSnapAnchor existingAnchor in GetPieceSnapAnchors(existingPiece))
             {
-                if (socket.Role != ConstructionSocketRole.PostTop)
+                float distanceSquared = Vector3.DistanceSquared(existingAnchor.Position, freePosition);
+
+                if (distanceSquared < bestDistanceSquared)
                 {
-                    continue;
-                }
-
-                float distance = Vector3.Distance(socket.Position, targetSocket.Position);
-
-                if (distance < 0.10f)
-                {
-                    continue;
-                }
-
-                float lengthError = MathF.Abs(distance - beamLength);
-
-                if (lengthError > maxLengthError)
-                {
-                    continue;
-                }
-
-                Vector3 spanDirection = Vector3.Normalize(socket.Position - targetSocket.Position);
-                float directionPenalty = 1.0f - MathF.Abs(Vector3.Dot(spanDirection, preferredForward));
-
-                float score = lengthError + directionPenalty * 0.18f;
-
-                if (score < bestScore)
-                {
-                    bestScore = score;
-                    bestOtherPost = socket;
-                    found = true;
+                    bestDistanceSquared = distanceSquared;
+                    bestPosition = GetBestPreviewPositionForAnchor(existingAnchor, freePosition);
                 }
             }
         }
 
-        if (!found)
+        return bestPosition;
+    }
+
+    private Vector3 GetBestPreviewPositionForAnchor(BuildSnapAnchor existingAnchor, Vector3 preferredCenter)
+    {
+        Vector3 bestPosition = preferredCenter;
+        float bestDistanceSquared = float.MaxValue;
+
+        foreach (BuildSnapAnchor localAnchor in GetPreviewLocalSnapAnchors(_buildYaw, _buildVerticalMode))
         {
-            return false;
+            Vector3 candidatePosition = existingAnchor.Position - localAnchor.Position;
+
+            // Important correction:
+            // A horizontal beam snapping onto the top of a vertical post should REST ON TOP.
+            // The beam mesh bottom is at its placement Y, so candidate Y should equal post-top Y.
+            if (!_buildVerticalMode && existingAnchor.Kind == BuildSnapAnchorKind.PostTop)
+            {
+                candidatePosition.Y = existingAnchor.Position.Y;
+            }
+
+            // A vertical post snapping onto a beam end should place its bottom at the beam end.
+            if (_buildVerticalMode && existingAnchor.Kind == BuildSnapAnchorKind.BeamEnd)
+            {
+                candidatePosition.Y = existingAnchor.Position.Y;
+            }
+
+            float distanceSquared = Vector3.DistanceSquared(candidatePosition, preferredCenter);
+
+            if (distanceSquared < bestDistanceSquared)
+            {
+                bestDistanceSquared = distanceSquared;
+                bestPosition = candidatePosition;
+            }
         }
 
-        Vector3 a = targetSocket.Position;
-        Vector3 b = bestOtherPost.Position;
-
-        Vector3 direction = Vector3.Normalize(b - a);
-
-        spanYaw = MathF.Atan2(-direction.Z, direction.X);
-
-        spanPosition = (a + b) * 0.5f;
-
-        // Beam bottom sits on the lower of the two post tops if terrain made them slightly uneven.
-        spanPosition.Y = MathF.Min(a.Y, b.Y);
-
-        return true;
+        return bestPosition;
     }
 
-    private static bool AreSocketsCompatible(ConstructionSocketRole worldRole, ConstructionSocketRole previewRole)
+    private bool TryGetViewedSnapAnchor(out BuildSnapAnchor snapAnchor)
     {
-        return worldRole switch
-        {
-            ConstructionSocketRole.PostTop =>
-                previewRole == ConstructionSocketRole.BeamBottom ||
-                previewRole == ConstructionSocketRole.PostBottom,
-
-            ConstructionSocketRole.BeamTop =>
-                previewRole == ConstructionSocketRole.PostBottom,
-
-            ConstructionSocketRole.BeamEnd =>
-                previewRole == ConstructionSocketRole.BeamEnd ||
-                previewRole == ConstructionSocketRole.PostBottom,
-
-            ConstructionSocketRole.PostBottom =>
-                previewRole == ConstructionSocketRole.PostTop,
-
-            _ => false
-        };
-    }
-
-    private bool TryGetViewedConstructionSocket(
-        ConstructionPreviewSocket selectedPreviewSocket,
-        out ConstructionWorldSocket socket)
-    {
-        socket = default;
+        snapAnchor = default;
 
         if (_placedConstructionPieces.Count == 0)
         {
@@ -1188,21 +1037,16 @@ public sealed unsafe class TorvexRenderer : IDisposable
         Vector3 rayDirection = GetCameraForward();
 
         const float maxDistance = 34.0f;
-        const float socketPickRadius = 1.15f;
+        const float snapRadius = 0.92f;
 
-        float bestDistanceSquared = socketPickRadius * socketPickRadius;
+        float bestDistanceSquared = snapRadius * snapRadius;
         bool found = false;
 
         foreach (PlacedConstructionPiece existingPiece in _placedConstructionPieces)
         {
-            foreach (ConstructionWorldSocket worldSocket in GetPieceSockets(existingPiece))
+            foreach (BuildSnapAnchor anchor in GetPieceSnapAnchors(existingPiece))
             {
-                if (!AreSocketsCompatible(worldSocket.Role, selectedPreviewSocket.Role))
-                {
-                    continue;
-                }
-
-                float alongRay = Vector3.Dot(worldSocket.Position - rayOrigin, rayDirection);
+                float alongRay = Vector3.Dot(anchor.Position - rayOrigin, rayDirection);
 
                 if (alongRay < 0.0f || alongRay > maxDistance)
                 {
@@ -1210,12 +1054,12 @@ public sealed unsafe class TorvexRenderer : IDisposable
                 }
 
                 Vector3 closestPointOnRay = rayOrigin + rayDirection * alongRay;
-                float distanceSquared = Vector3.DistanceSquared(worldSocket.Position, closestPointOnRay);
+                float distanceSquared = Vector3.DistanceSquared(anchor.Position, closestPointOnRay);
 
                 if (distanceSquared < bestDistanceSquared)
                 {
                     bestDistanceSquared = distanceSquared;
-                    socket = worldSocket;
+                    snapAnchor = anchor;
                     found = true;
                 }
             }
@@ -1224,204 +1068,41 @@ public sealed unsafe class TorvexRenderer : IDisposable
         return found;
     }
 
-    private bool TryGetNearestConstructionSocket(
-        Vector3 freePosition,
-        ConstructionPreviewSocket selectedPreviewSocket,
-        out ConstructionWorldSocket socket)
-    {
-        socket = default;
-
-        if (_placedConstructionPieces.Count == 0)
-        {
-            return false;
-        }
-
-        const float snapRadius = 1.05f;
-
-        float bestDistanceSquared = snapRadius * snapRadius;
-        bool found = false;
-
-        foreach (PlacedConstructionPiece existingPiece in _placedConstructionPieces)
-        {
-            foreach (ConstructionWorldSocket worldSocket in GetPieceSockets(existingPiece))
-            {
-                if (!AreSocketsCompatible(worldSocket.Role, selectedPreviewSocket.Role))
-                {
-                    continue;
-                }
-
-                float distanceSquared = Vector3.DistanceSquared(worldSocket.Position, freePosition);
-
-                if (distanceSquared < bestDistanceSquared)
-                {
-                    bestDistanceSquared = distanceSquared;
-                    socket = worldSocket;
-                    found = true;
-                }
-            }
-        }
-
-        return found;
-    }
-
-    private int GetDefaultPreviewSocketIndex()
-    {
-        return _buildVerticalMode
-            ? 0
-            : 2;
-    }
-
-    private string GetSelectedPreviewSocketName()
-    {
-        List<ConstructionPreviewSocket> sockets = GetPreviewSockets(GetEffectiveBuildYaw(), _buildVerticalMode);
-
-        if (sockets.Count == 0)
-        {
-            return "None";
-        }
-
-        if (_selectedPreviewSocketIndex < 0 || _selectedPreviewSocketIndex >= sockets.Count)
-        {
-            _selectedPreviewSocketIndex = GetDefaultPreviewSocketIndex();
-        }
-
-        return sockets[_selectedPreviewSocketIndex].Name;
-    }
-
-    private float GetEffectiveBuildYaw()
-    {
-        if (_hasBuildYawOverride)
-        {
-            return _buildYawOverride;
-        }
-
-        const float quarterTurn = MathF.PI * 0.5f;
-
-        if (!_buildSnapEnabled)
-        {
-            return _buildYaw;
-        }
-
-        return MathF.Round(_buildYaw / quarterTurn) * quarterTurn;
-    }
-
-    private static List<ConstructionPreviewSocket> GetPreviewSockets(float yawRadians, bool isVertical)
+    private static IEnumerable<BuildSnapAnchor> GetPreviewLocalSnapAnchors(float yawRadians, bool isVertical)
     {
         const float beamHalfLength = 1.55f;
-        const float beamFullLength = beamHalfLength * 2.0f;
-        const float beamHeight = 0.34f;
-
-        List<ConstructionPreviewSocket> sockets = new();
-
         if (isVertical)
         {
-            sockets.Add(new ConstructionPreviewSocket(
-                Vector3.Zero,
-                ConstructionSocketRole.PostBottom,
-                "Post Bottom"
-            ));
-
-            sockets.Add(new ConstructionPreviewSocket(
-                new Vector3(0.0f, beamFullLength, 0.0f),
-                ConstructionSocketRole.PostTop,
-                "Post Top"
-            ));
-
-            return sockets;
-        }
-
-        Vector3 forward = GetBuildForward(yawRadians);
-
-        sockets.Add(new ConstructionPreviewSocket(
-            forward * beamHalfLength,
-            ConstructionSocketRole.BeamEnd,
-            "Start End"
-        ));
-
-        sockets.Add(new ConstructionPreviewSocket(
-            -forward * beamHalfLength,
-            ConstructionSocketRole.BeamEnd,
-            "End End"
-        ));
-
-        sockets.Add(new ConstructionPreviewSocket(
-            forward * beamHalfLength,
-            ConstructionSocketRole.BeamBottom,
-            "Bottom Start"
-        ));
-
-        sockets.Add(new ConstructionPreviewSocket(
-            Vector3.Zero,
-            ConstructionSocketRole.BeamBottom,
-            "Bottom Center"
-        ));
-
-        sockets.Add(new ConstructionPreviewSocket(
-            -forward * beamHalfLength,
-            ConstructionSocketRole.BeamBottom,
-            "Bottom End"
-        ));
-
-        sockets.Add(new ConstructionPreviewSocket(
-            new Vector3(0.0f, beamHeight, 0.0f),
-            ConstructionSocketRole.BeamTop,
-            "Top Center"
-        ));
-
-        return sockets;
-    }
-
-    private static IEnumerable<ConstructionWorldSocket> GetPieceSockets(PlacedConstructionPiece piece)
-    {
-        const float beamHalfLength = 1.55f;
-        const float beamFullLength = beamHalfLength * 2.0f;
-        const float beamHeight = 0.34f;
-
-        if (piece.IsVertical)
-        {
-            yield return new ConstructionWorldSocket(
-                piece.Position,
-                ConstructionSocketRole.PostBottom,
-                "Post Bottom"
-            );
-
-            yield return new ConstructionWorldSocket(
-                piece.Position + new Vector3(0.0f, beamFullLength, 0.0f),
-                ConstructionSocketRole.PostTop,
-                "Post Top"
-            );
-
+            yield return new BuildSnapAnchor(Vector3.Zero, BuildSnapAnchorKind.PostBottom);
+            yield return new BuildSnapAnchor(new Vector3(0.0f, beamHalfLength * 2.0f, 0.0f), BuildSnapAnchorKind.PostTop);
             yield break;
         }
 
-        Vector3 forward = GetBuildForward(piece.YawRadians);
+        Vector3 forward = new(MathF.Cos(yawRadians), 0.0f, -MathF.Sin(yawRadians));
 
-        yield return new ConstructionWorldSocket(
-            piece.Position + forward * beamHalfLength,
-            ConstructionSocketRole.BeamEnd,
-            "Beam Start End"
-        );
+        // Beam end anchors are on the beam bottom line.
+        yield return new BuildSnapAnchor(forward * beamHalfLength, BuildSnapAnchorKind.BeamEnd);
+        yield return new BuildSnapAnchor(-forward * beamHalfLength, BuildSnapAnchorKind.BeamEnd);
 
-        yield return new ConstructionWorldSocket(
-            piece.Position - forward * beamHalfLength,
-            ConstructionSocketRole.BeamEnd,
-            "Beam End End"
-        );
-
-        yield return new ConstructionWorldSocket(
-            piece.Position + new Vector3(0.0f, beamHeight, 0.0f),
-            ConstructionSocketRole.BeamTop,
-            "Beam Top Center"
-        );
+        // Also allow snapping beam underside to supports.
+        yield return new BuildSnapAnchor(new Vector3(0.0f, 0.0f, 0.0f), BuildSnapAnchorKind.BeamEnd);
     }
 
-    private static Vector3 GetBuildForward(float yawRadians)
+    private static IEnumerable<BuildSnapAnchor> GetPieceSnapAnchors(PlacedConstructionPiece piece)
     {
-        return Vector3.Normalize(new Vector3(
-            MathF.Cos(yawRadians),
-            0.0f,
-            -MathF.Sin(yawRadians)
-        ));
+        const float beamHalfLength = 1.55f;
+
+        if (piece.IsVertical)
+        {
+            yield return new BuildSnapAnchor(piece.Position, BuildSnapAnchorKind.PostBottom);
+            yield return new BuildSnapAnchor(piece.Position + new Vector3(0.0f, beamHalfLength * 2.0f, 0.0f), BuildSnapAnchorKind.PostTop);
+            yield break;
+        }
+
+        Vector3 forward = new(MathF.Cos(piece.YawRadians), 0.0f, -MathF.Sin(piece.YawRadians));
+
+        yield return new BuildSnapAnchor(piece.Position + forward * beamHalfLength, BuildSnapAnchorKind.BeamEnd);
+        yield return new BuildSnapAnchor(piece.Position - forward * beamHalfLength, BuildSnapAnchorKind.BeamEnd);
     }
 
     private bool TryGetTerrainTarget(out Vector3 targetPoint)
@@ -1481,20 +1162,10 @@ public sealed unsafe class TorvexRenderer : IDisposable
             previousPoint = samplePoint;
         }
 
-        List<ConstructionPreviewSocket> previewSockets = GetPreviewSockets(GetEffectiveBuildYaw(), _buildVerticalMode);
-
-        if (previewSockets.Count > 0)
+        if (TryGetViewedSnapAnchor(out BuildSnapAnchor snapAnchor))
         {
-            if (_selectedPreviewSocketIndex < 0 || _selectedPreviewSocketIndex >= previewSockets.Count)
-            {
-                _selectedPreviewSocketIndex = GetDefaultPreviewSocketIndex();
-            }
-
-            if (TryGetViewedConstructionSocket(previewSockets[_selectedPreviewSocketIndex], out ConstructionWorldSocket socket))
-            {
-                targetPoint = socket.Position;
-                return true;
-            }
+            targetPoint = snapAnchor.Position;
+            return true;
         }
 
         return false;
@@ -2371,9 +2042,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Dispose();
     }
 }
-
-
-
 
 
 

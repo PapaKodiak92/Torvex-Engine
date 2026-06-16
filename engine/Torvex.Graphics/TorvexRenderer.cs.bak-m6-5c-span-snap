@@ -106,9 +106,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private bool _wasNDown;
     private int _selectedPreviewSocketIndex = 2;
 
-    private bool _hasBuildYawOverride;
-    private float _buildYawOverride;
-
     private readonly List<PlacedConstructionPiece> _placedConstructionPieces = [];
     private bool _wasLeftMouseDown;
     private bool _wasRightMouseDown;
@@ -993,8 +990,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
     private Vector3 GetSnappedBuildPosition(Vector3 targetPoint)
     {
-        _hasBuildYawOverride = false;
-
         Vector3 freePosition = targetPoint + new Vector3(0.0f, _buildHeightOffset, 0.0f);
 
         if (!_buildVerticalMode && MathF.Abs(_buildHeightOffset) < 0.001f)
@@ -1033,13 +1028,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
             return freePosition;
         }
 
-        if (TryResolveBeamSpanPlacement(targetSocket, selectedSocket, out Vector3 spanPosition, out float spanYaw))
-        {
-            _hasBuildYawOverride = true;
-            _buildYawOverride = spanYaw;
-            return spanPosition;
-        }
-
         Vector3 snappedPosition = targetSocket.Position - selectedSocket.LocalPosition;
 
         // Critical rule:
@@ -1062,93 +1050,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
         }
 
         return snappedPosition;
-    }
-
-    private bool TryResolveBeamSpanPlacement(
-        ConstructionWorldSocket targetSocket,
-        ConstructionPreviewSocket selectedSocket,
-        out Vector3 spanPosition,
-        out float spanYaw)
-    {
-        spanPosition = Vector3.Zero;
-        spanYaw = GetEffectiveBuildYaw();
-
-        if (_buildVerticalMode)
-        {
-            return false;
-        }
-
-        if (targetSocket.Role != ConstructionSocketRole.PostTop ||
-            selectedSocket.Role != ConstructionSocketRole.BeamBottom)
-        {
-            return false;
-        }
-
-        const float beamHalfLength = 1.55f;
-        const float beamLength = beamHalfLength * 2.0f;
-        const float maxLengthError = 0.55f;
-
-        ConstructionWorldSocket bestOtherPost = default;
-        float bestScore = float.MaxValue;
-        bool found = false;
-
-        Vector3 preferredForward = GetBuildForward(GetEffectiveBuildYaw());
-
-        foreach (PlacedConstructionPiece piece in _placedConstructionPieces)
-        {
-            foreach (ConstructionWorldSocket socket in GetPieceSockets(piece))
-            {
-                if (socket.Role != ConstructionSocketRole.PostTop)
-                {
-                    continue;
-                }
-
-                float distance = Vector3.Distance(socket.Position, targetSocket.Position);
-
-                if (distance < 0.10f)
-                {
-                    continue;
-                }
-
-                float lengthError = MathF.Abs(distance - beamLength);
-
-                if (lengthError > maxLengthError)
-                {
-                    continue;
-                }
-
-                Vector3 spanDirection = Vector3.Normalize(socket.Position - targetSocket.Position);
-                float directionPenalty = 1.0f - MathF.Abs(Vector3.Dot(spanDirection, preferredForward));
-
-                float score = lengthError + directionPenalty * 0.18f;
-
-                if (score < bestScore)
-                {
-                    bestScore = score;
-                    bestOtherPost = socket;
-                    found = true;
-                }
-            }
-        }
-
-        if (!found)
-        {
-            return false;
-        }
-
-        Vector3 a = targetSocket.Position;
-        Vector3 b = bestOtherPost.Position;
-
-        Vector3 direction = Vector3.Normalize(b - a);
-
-        spanYaw = MathF.Atan2(-direction.Z, direction.X);
-
-        spanPosition = (a + b) * 0.5f;
-
-        // Beam bottom sits on the lower of the two post tops if terrain made them slightly uneven.
-        spanPosition.Y = MathF.Min(a.Y, b.Y);
-
-        return true;
     }
 
     private static bool AreSocketsCompatible(ConstructionSocketRole worldRole, ConstructionSocketRole previewRole)
@@ -1290,11 +1191,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
     private float GetEffectiveBuildYaw()
     {
-        if (_hasBuildYawOverride)
-        {
-            return _buildYawOverride;
-        }
-
         const float quarterTurn = MathF.PI * 0.5f;
 
         if (!_buildSnapEnabled)
@@ -2371,7 +2267,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Dispose();
     }
 }
-
 
 
 

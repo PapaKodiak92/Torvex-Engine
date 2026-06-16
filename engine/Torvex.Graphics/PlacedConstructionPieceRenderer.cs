@@ -7,7 +7,8 @@ namespace Torvex.Graphics;
 
 public readonly record struct PlacedConstructionPiece(
     Vector3 Position,
-    float YawRadians
+    float YawRadians,
+    bool IsVertical
 );
 
 public sealed unsafe class PlacedConstructionPieceRenderer : IDisposable
@@ -53,15 +54,28 @@ public sealed unsafe class PlacedConstructionPieceRenderer : IDisposable
 
         foreach (PlacedConstructionPiece piece in pieces)
         {
-            Matrix4x4 model =
-                Matrix4x4.CreateRotationY(piece.YawRadians) *
-                Matrix4x4.CreateTranslation(piece.Position + new Vector3(0.0f, 0.035f, 0.0f));
+            Matrix4x4 model = CreateBeamModelMatrix(piece.Position, piece.YawRadians, piece.IsVertical);
 
             SetMatrix4(_modelLocation, model);
             _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_vertexCount);
         }
 
         _gl.BindVertexArray(0);
+    }
+
+    private static Matrix4x4 CreateBeamModelMatrix(Vector3 groundPosition, float yawRadians, bool isVertical)
+    {
+        if (isVertical)
+        {
+            return
+                Matrix4x4.CreateRotationZ(MathF.PI * 0.5f) *
+                Matrix4x4.CreateRotationY(yawRadians) *
+                Matrix4x4.CreateTranslation(groundPosition + new Vector3(0.0f, 1.55f, 0.0f));
+        }
+
+        return
+            Matrix4x4.CreateRotationY(yawRadians) *
+            Matrix4x4.CreateTranslation(groundPosition);
     }
 
     private void CreateTimberBeamMesh()
@@ -275,3 +289,5 @@ public sealed unsafe class PlacedConstructionPieceRenderer : IDisposable
         }
     }
 }
+
+

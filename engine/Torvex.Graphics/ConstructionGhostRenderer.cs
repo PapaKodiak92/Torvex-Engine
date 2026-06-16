@@ -35,6 +35,7 @@ public sealed unsafe class ConstructionGhostRenderer : IDisposable
         Matrix4x4 projection,
         Vector3 groundPosition,
         float yawRadians,
+        bool isVertical,
         bool isValid,
         float timeSeconds)
     {
@@ -47,9 +48,7 @@ public sealed unsafe class ConstructionGhostRenderer : IDisposable
             ? new Vector4(0.72f, 0.46f, 0.20f, alpha)
             : new Vector4(0.95f, 0.18f, 0.12f, alpha);
 
-        Matrix4x4 model =
-            Matrix4x4.CreateRotationY(yawRadians) *
-            Matrix4x4.CreateTranslation(groundPosition + new Vector3(0.0f, 0.035f, 0.0f));
+        Matrix4x4 model = CreateBeamModelMatrix(groundPosition, yawRadians, isVertical);
 
         _gl.DepthMask(false);
         _gl.UseProgram(_shaderProgram);
@@ -65,6 +64,21 @@ public sealed unsafe class ConstructionGhostRenderer : IDisposable
         _gl.BindVertexArray(0);
 
         _gl.DepthMask(true);
+    }
+
+    private static Matrix4x4 CreateBeamModelMatrix(Vector3 groundPosition, float yawRadians, bool isVertical)
+    {
+        if (isVertical)
+        {
+            return
+                Matrix4x4.CreateRotationZ(MathF.PI * 0.5f) *
+                Matrix4x4.CreateRotationY(yawRadians) *
+                Matrix4x4.CreateTranslation(groundPosition + new Vector3(0.0f, 1.55f, 0.0f));
+        }
+
+        return
+            Matrix4x4.CreateRotationY(yawRadians) *
+            Matrix4x4.CreateTranslation(groundPosition);
     }
 
     private void CreateTimberBeamMesh()
@@ -267,3 +281,5 @@ public sealed unsafe class ConstructionGhostRenderer : IDisposable
         }
     }
 }
+
+
