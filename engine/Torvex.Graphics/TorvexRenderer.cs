@@ -12,11 +12,12 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private readonly IWindow _window;
     private GL? _gl;
 
-    private uint _cubeVertexArray;
-    private uint _cubeVertexBuffer;
+    private uint _testVertexArray;
+    private uint _testVertexBuffer;
 
-    private uint _groundVertexArray;
-    private uint _groundVertexBuffer;
+    private uint _terrainVertexArray;
+    private uint _terrainVertexBuffer;
+    private int _terrainVertexCount;
 
     private uint _shaderProgram;
 
@@ -24,9 +25,9 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private int _viewLocation;
     private int _projectionLocation;
 
-    private Vector3 _cameraPosition = new(0f, 1.2f, 5f);
+    private Vector3 _cameraPosition = new(0f, 3.5f, 8f);
     private float _cameraYaw;
-    private float _cameraPitch = -0.12f;
+    private float _cameraPitch = -0.22f;
 
     private float _time;
 
@@ -47,10 +48,11 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Disable(EnableCap.CullFace);
 
         CreateShader();
-        CreateCubeMesh();
-        CreateGroundMesh();
+        CreateTestMesh();
+        CreateTerrainMesh();
 
         Console.WriteLine($"Graphics initialized. Framebuffer: {_window.FramebufferSize.X}x{_window.FramebufferSize.Y}");
+        Console.WriteLine($"Terrain mesh generated. Vertices: {_terrainVertexCount}");
     }
 
     public void Update(double deltaTime, TorvexWindow input)
@@ -66,8 +68,8 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         float lookSpeed = 1.8f;
         float moveSpeed = input.IsKeyDown(Key.ShiftLeft) || input.IsKeyDown(Key.ShiftRight)
-            ? 8.5f
-            : 4.0f;
+            ? 12.0f
+            : 6.0f;
 
         if (input.IsKeyDown(Key.Left))
         {
@@ -150,7 +152,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
             MathF.PI / 4f,
             aspectRatio,
             0.1f,
-            500f
+            1000f
         );
 
         _gl.UseProgram(_shaderProgram);
@@ -158,23 +160,21 @@ public sealed unsafe class TorvexRenderer : IDisposable
         SetMatrix4(_viewLocation, view);
         SetMatrix4(_projectionLocation, projection);
 
-        DrawGround();
+        DrawTerrain();
         DrawTestMesh();
     }
 
-    private void DrawGround()
+    private void DrawTerrain()
     {
         if (_gl is null)
         {
             return;
         }
 
-        Matrix4x4 model = Matrix4x4.Identity;
+        SetMatrix4(_modelLocation, Matrix4x4.Identity);
 
-        SetMatrix4(_modelLocation, model);
-
-        _gl.BindVertexArray(_groundVertexArray);
-        _gl.DrawArrays(PrimitiveType.Triangles, 0, 6);
+        _gl.BindVertexArray(_terrainVertexArray);
+        _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_terrainVertexCount);
         _gl.BindVertexArray(0);
     }
 
@@ -185,14 +185,18 @@ public sealed unsafe class TorvexRenderer : IDisposable
             return;
         }
 
+        float markerX = 0f;
+        float markerZ = 0f;
+        float markerY = GetTerrainHeight(markerX, markerZ) + 0.65f;
+
         Matrix4x4 model =
             Matrix4x4.CreateScale(1.2f, 1.0f, 1.2f) *
             Matrix4x4.CreateRotationY(_time * 0.45f) *
-            Matrix4x4.CreateTranslation(0f, 0.5f, 0f);
+            Matrix4x4.CreateTranslation(markerX, markerY, markerZ);
 
         SetMatrix4(_modelLocation, model);
 
-        _gl.BindVertexArray(_cubeVertexArray);
+        _gl.BindVertexArray(_testVertexArray);
         _gl.DrawArrays(PrimitiveType.Triangles, 0, 36);
         _gl.BindVertexArray(0);
     }
@@ -204,6 +208,41 @@ public sealed unsafe class TorvexRenderer : IDisposable
             MathF.Sin(_cameraPitch),
             -MathF.Cos(_cameraPitch) * MathF.Cos(_cameraYaw)
         ));
+    }
+
+    private float GetTerrainHeight(float x, float z)
+    {
+        float broadHills =
+            MathF.Sin(x * 0.16f) * 0.8f +
+            MathF.Cos(z * 0.13f) * 0.7f;
+
+        float smallerRolls =
+            MathF.Sin((x + z) * 0.34f) * 0.25f +
+            MathF.Cos((x - z) * 0.27f) * 0.20f;
+
+        float valley = -MathF.Exp(-(x * x + z * z) * 0.006f) * 0.65f;
+
+        return broadHills + smallerRolls + valley;
+    }
+
+    private Vector3 GetTerrainColor(float height)
+    {
+        if (height < -0.65f)
+        {
+            return new Vector3(0.18f, 0.24f, 0.18f);
+        }
+
+        if (height < 0.35f)
+        {
+            return new Vector3(0.25f, 0.36f, 0.22f);
+        }
+
+        if (height < 1.0f)
+        {
+            return new Vector3(0.36f, 0.42f, 0.26f);
+        }
+
+        return new Vector3(0.42f, 0.38f, 0.32f);
     }
 
     private void SetViewport(Vector2D<int> size)
@@ -279,13 +318,57 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _projectionLocation = _gl.GetUniformLocation(_shaderProgram, "uProjection");
     }
 
-    private void CreateCubeMesh()
+    private void CreateTerrainMesh()
     {
-        if (_gl is null)
+        int resolution = 96;
+        float worldSize = 64f;
+        float step = worldSize / resolution;
+        float half = worldSize * 0.5f;
+
+        List<float> vertices = [];
+
+        for (int z = 0; z < resolution; z++)
         {
-            throw new InvalidOperationException("OpenGL has not been initialized.");
+            for (int x = 0; x < resolution; x++)
+            {
+                float x0 = -half + x * step;
+                float z0 = -half + z * step;
+                float x1 = x0 + step;
+                float z1 = z0 + step;
+
+                AddTerrainTriangle(vertices, x0, z0, x1, z0, x1, z1);
+                AddTerrainTriangle(vertices, x1, z1, x0, z1, x0, z0);
+            }
         }
 
+        _terrainVertexCount = vertices.Count / 6;
+
+        CreateVertexObjects(vertices.ToArray(), out _terrainVertexArray, out _terrainVertexBuffer);
+    }
+
+    private void AddTerrainTriangle(List<float> vertices, float ax, float az, float bx, float bz, float cx, float cz)
+    {
+        AddTerrainVertex(vertices, ax, az);
+        AddTerrainVertex(vertices, bx, bz);
+        AddTerrainVertex(vertices, cx, cz);
+    }
+
+    private void AddTerrainVertex(List<float> vertices, float x, float z)
+    {
+        float y = GetTerrainHeight(x, z);
+        Vector3 color = GetTerrainColor(y);
+
+        vertices.Add(x);
+        vertices.Add(y);
+        vertices.Add(z);
+
+        vertices.Add(color.X);
+        vertices.Add(color.Y);
+        vertices.Add(color.Z);
+    }
+
+    private void CreateTestMesh()
+    {
         float[] vertices =
         [
             -0.5f, -0.5f,  0.5f,    0.68f, 0.48f, 0.30f,
@@ -331,30 +414,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
              0.5f, -0.5f, -0.5f,    0.18f, 0.18f, 0.20f,
         ];
 
-        CreateVertexObjects(vertices, out _cubeVertexArray, out _cubeVertexBuffer);
-    }
-
-    private void CreateGroundMesh()
-    {
-        if (_gl is null)
-        {
-            throw new InvalidOperationException("OpenGL has not been initialized.");
-        }
-
-        float size = 24f;
-
-        float[] vertices =
-        [
-            -size, 0f, -size,   0.22f, 0.30f, 0.22f,
-             size, 0f, -size,   0.22f, 0.30f, 0.22f,
-             size, 0f,  size,   0.28f, 0.38f, 0.26f,
-
-             size, 0f,  size,   0.28f, 0.38f, 0.26f,
-            -size, 0f,  size,   0.28f, 0.38f, 0.26f,
-            -size, 0f, -size,   0.22f, 0.30f, 0.22f,
-        ];
-
-        CreateVertexObjects(vertices, out _groundVertexArray, out _groundVertexBuffer);
+        CreateVertexObjects(vertices, out _testVertexArray, out _testVertexBuffer);
     }
 
     private void CreateVertexObjects(float[] vertices, out uint vertexArray, out uint vertexBuffer)
@@ -383,24 +443,10 @@ public sealed unsafe class TorvexRenderer : IDisposable
         const uint stride = 6 * sizeof(float);
 
         _gl.EnableVertexAttribArray(0);
-        _gl.VertexAttribPointer(
-            0,
-            3,
-            VertexAttribPointerType.Float,
-            false,
-            stride,
-            (void*)0
-        );
+        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, (void*)0);
 
         _gl.EnableVertexAttribArray(1);
-        _gl.VertexAttribPointer(
-            1,
-            3,
-            VertexAttribPointerType.Float,
-            false,
-            stride,
-            (void*)(3 * sizeof(float))
-        );
+        _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, (void*)(3 * sizeof(float)));
 
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
         _gl.BindVertexArray(0);
@@ -457,24 +503,24 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         _window.FramebufferResize -= SetViewport;
 
-        if (_cubeVertexBuffer != 0)
+        if (_testVertexBuffer != 0)
         {
-            _gl.DeleteBuffer(_cubeVertexBuffer);
+            _gl.DeleteBuffer(_testVertexBuffer);
         }
 
-        if (_cubeVertexArray != 0)
+        if (_testVertexArray != 0)
         {
-            _gl.DeleteVertexArray(_cubeVertexArray);
+            _gl.DeleteVertexArray(_testVertexArray);
         }
 
-        if (_groundVertexBuffer != 0)
+        if (_terrainVertexBuffer != 0)
         {
-            _gl.DeleteBuffer(_groundVertexBuffer);
+            _gl.DeleteBuffer(_terrainVertexBuffer);
         }
 
-        if (_groundVertexArray != 0)
+        if (_terrainVertexArray != 0)
         {
-            _gl.DeleteVertexArray(_groundVertexArray);
+            _gl.DeleteVertexArray(_terrainVertexArray);
         }
 
         if (_shaderProgram != 0)
