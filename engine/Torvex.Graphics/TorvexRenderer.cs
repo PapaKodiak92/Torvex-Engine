@@ -24,6 +24,8 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
     private WorldPrecipitationRenderer? _worldPrecipitationRenderer;
     private TerrainTargetMarkerRenderer? _terrainTargetMarkerRenderer;
+    private ConstructionGhostRenderer? _constructionGhostRenderer;
+    private PlacedConstructionPieceRenderer? _placedConstructionPieceRenderer;
 
     private uint _terrainVertexArray;
     private uint _terrainVertexBuffer;
@@ -91,6 +93,15 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private bool _hasTerrainTarget;
     private Vector3 _terrainTargetPoint;
 
+    private bool _buildMode = true;
+    private bool _wasBDown;
+    private bool _wasRDown;
+    private float _buildYaw;
+
+    private readonly List<PlacedConstructionPiece> _placedConstructionPieces = [];
+    private bool _wasLeftMouseDown;
+    private bool _wasRightMouseDown;
+
     private const float FieldOfViewRadians = MathF.PI / 4f;
     private const float DayLengthSeconds = 180f;
     private const float MoonCycleDays = 8f;
@@ -140,6 +151,12 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         _terrainTargetMarkerRenderer = new TerrainTargetMarkerRenderer(_gl);
         _terrainTargetMarkerRenderer.Initialize();
+
+        _constructionGhostRenderer = new ConstructionGhostRenderer(_gl);
+        _constructionGhostRenderer.Initialize();
+
+        _placedConstructionPieceRenderer = new PlacedConstructionPieceRenderer(_gl);
+        _placedConstructionPieceRenderer.Initialize();
 
         CreateSkyShader();
         CreateSkyMesh();
@@ -353,6 +370,8 @@ public sealed unsafe class TorvexRenderer : IDisposable
         }
 
         _hasTerrainTarget = TryGetTerrainTarget(out _terrainTargetPoint);
+        UpdateBuildPreviewControls(dt, input);
+        UpdateConstructionPlacementControls(input);
     }
 
     public void Render(double deltaTime)
@@ -452,7 +471,24 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         DrawTerrain();
 
-        if (_hasTerrainTarget)
+        _placedConstructionPieceRenderer?.Render(
+            view,
+            projection,
+            _placedConstructionPieces
+        );
+
+        if (_hasTerrainTarget && _buildMode)
+        {
+            _constructionGhostRenderer?.Render(
+                view,
+                projection,
+                _terrainTargetPoint,
+                _buildYaw,
+                true,
+                _weatherTime
+            );
+        }
+        else if (_hasTerrainTarget)
         {
             _terrainTargetMarkerRenderer?.Render(
                 view,
@@ -795,6 +831,75 @@ public sealed unsafe class TorvexRenderer : IDisposable
         float snowDepth = Lerp(0.0f, 0.26f, SmoothStep(0.0f, 1.0f, _snowAccumulation));
 
         return terrainHeight + snowMask * snowDepth;
+    }
+
+    private void UpdateConstructionPlacementControls(TorvexWindow input)
+    {
+        bool leftMouseDown = input.IsMouseButtonDown(MouseButton.Left);
+
+        if (leftMouseDown && !_wasLeftMouseDown && _buildMode && _hasTerrainTarget)
+        {
+            _placedConstructionPieces.Add(new PlacedConstructionPiece(
+                _terrainTargetPoint,
+                _buildYaw
+            ));
+
+            Console.WriteLine($"Placed timber beam #{_placedConstructionPieces.Count} at X {_terrainTargetPoint.X:0.00}, Y {_terrainTargetPoint.Y:0.00}, Z {_terrainTargetPoint.Z:0.00}");
+        }
+
+        _wasLeftMouseDown = leftMouseDown;
+
+        bool rightMouseDown = input.IsMouseButtonDown(MouseButton.Right);
+
+        if (rightMouseDown && !_wasRightMouseDown)
+        {
+            _buildMode = false;
+            Console.WriteLine("Build preview: Off");
+        }
+
+        _wasRightMouseDown = rightMouseDown;
+    }
+
+    private void UpdateBuildPreviewControls(float dt, TorvexWindow input)
+    {
+        bool bDown = input.IsKeyDown(Key.B);
+
+        if (bDown && !_wasBDown)
+        {
+            _buildMode = !_buildMode;
+            Console.WriteLine($"Build preview: {(_buildMode ? "Timber Beam" : "Off")}");
+        }
+
+        _wasBDown = bDown;
+
+        bool rDown = input.IsKeyDown(Key.R);
+
+        if (rDown && !_wasRDown)
+        {
+            _buildYaw += MathF.PI * 0.5f;
+        }
+
+        _wasRDown = rDown;
+
+        if (input.IsKeyDown(Key.Q))
+        {
+            _buildYaw += 1.7f * dt;
+        }
+
+        if (input.IsKeyDown(Key.E))
+        {
+            _buildYaw -= 1.7f * dt;
+        }
+
+        if (_buildYaw > MathF.Tau)
+        {
+            _buildYaw -= MathF.Tau;
+        }
+
+        if (_buildYaw < -MathF.Tau)
+        {
+            _buildYaw += MathF.Tau;
+        }
     }
 
     private bool TryGetTerrainTarget(out Vector3 targetPoint)
@@ -1689,6 +1794,12 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _terrainTargetMarkerRenderer?.Dispose();
         _terrainTargetMarkerRenderer = null;
 
+        _constructionGhostRenderer?.Dispose();
+        _constructionGhostRenderer = null;
+
+        _placedConstructionPieceRenderer?.Dispose();
+        _placedConstructionPieceRenderer = null;
+
         if (_terrainVertexBuffer != 0)
         {
             _gl.DeleteBuffer(_terrainVertexBuffer);
@@ -1722,5 +1833,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Dispose();
     }
 }
+
+
 
 

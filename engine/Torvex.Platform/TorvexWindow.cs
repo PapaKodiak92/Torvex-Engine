@@ -15,6 +15,7 @@ public sealed record TorvexWindowSettings(
 public sealed class TorvexWindow : IDisposable
 {
     private readonly HashSet<Key> _keysDown = [];
+    private readonly HashSet<MouseButton> _mouseButtonsDown = [];
 
     private IWindow? _window;
     private IInputContext? _input;
@@ -35,6 +36,11 @@ public sealed class TorvexWindow : IDisposable
     public bool IsKeyDown(Key key)
     {
         return _keysDown.Contains(key);
+    }
+
+    public bool IsMouseButtonDown(MouseButton button)
+    {
+        return _mouseButtonsDown.Contains(button);
     }
 
     public Vector2 ConsumeMouseDelta()
@@ -82,6 +88,8 @@ public sealed class TorvexWindow : IDisposable
         foreach (IMouse mouse in _input.Mice)
         {
             mouse.MouseMove += OnMouseMove;
+            mouse.MouseDown += OnMouseDown;
+            mouse.MouseUp += OnMouseUp;
         }
 
         SetMouseCaptured(true);
@@ -107,6 +115,16 @@ public sealed class TorvexWindow : IDisposable
     private void OnKeyUp(IKeyboard keyboard, Key key, int keyCode)
     {
         _keysDown.Remove(key);
+    }
+
+    private void OnMouseDown(IMouse mouse, MouseButton button)
+    {
+        _mouseButtonsDown.Add(button);
+    }
+
+    private void OnMouseUp(IMouse mouse, MouseButton button)
+    {
+        _mouseButtonsDown.Remove(button);
     }
 
     private void OnMouseMove(IMouse mouse, Vector2 position)
@@ -156,3 +174,4 @@ public sealed class TorvexWindow : IDisposable
         _window?.Dispose();
     }
 }
+
