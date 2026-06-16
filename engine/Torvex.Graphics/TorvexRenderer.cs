@@ -27,6 +27,9 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private int _lightDirectionLocation;
     private int _ambientLightLocation;
     private int _sunStrengthLocation;
+    private int _fogColorLocation;
+    private int _fogStartLocation;
+    private int _fogEndLocation;
 
     private Vector3 _cameraPosition = new(0f, 3.5f, 8f);
     private float _cameraYaw;
@@ -46,12 +49,12 @@ public sealed unsafe class TorvexRenderer : IDisposable
         SetViewport(_window.FramebufferSize);
         _window.FramebufferResize += SetViewport;
 
-        _gl.ClearColor(0.42f, 0.58f, 0.78f, 1.0f);
+        _gl.ClearColor(0.46f, 0.62f, 0.82f, 1.0f);
         _gl.Enable(EnableCap.DepthTest);
         _gl.Disable(EnableCap.CullFace);
 
         CreateShader();
-        CreateTestMesh();
+        //CreateTestMesh();
         CreateTerrainMesh();
 
         Console.WriteLine($"Graphics initialized. Framebuffer: {_window.FramebufferSize.X}x{_window.FramebufferSize.Y}");
@@ -170,8 +173,14 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Uniform1(_ambientLightLocation, 0.34f);
         _gl.Uniform1(_sunStrengthLocation, 0.82f);
 
+        Vector3 fogColor = new(0.46f, 0.62f, 0.82f);
+
+        _gl.Uniform3(_fogColorLocation, fogColor.X, fogColor.Y, fogColor.Z);
+        _gl.Uniform1(_fogStartLocation, 38.0f);
+        _gl.Uniform1(_fogEndLocation, 115.0f);
+
         DrawTerrain();
-        DrawTestMesh();
+        //DrawTestMesh();
     }
 
     private void DrawTerrain()
@@ -311,12 +320,18 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         out vec3 vertexNormal;
         out vec3 vertexColor;
+        out float vertexFogDepth;
 
         void main()
         {
+            vec4 worldPosition = uModel * vec4(aPosition, 1.0);
+            vec4 viewPosition = uView * worldPosition;
+
             vertexColor = aColor;
             vertexNormal = normalize(mat3(uModel) * aNormal);
-            gl_Position = uProjection * uView * uModel * vec4(aPosition, 1.0);
+            vertexFogDepth = length(viewPosition.xyz);
+
+            gl_Position = uProjection * viewPosition;
         }
         """;
 
@@ -325,10 +340,15 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         in vec3 vertexNormal;
         in vec3 vertexColor;
+        in float vertexFogDepth;
 
         uniform vec3 uLightDirection;
         uniform float uAmbientLight;
         uniform float uSunStrength;
+
+        uniform vec3 uFogColor;
+        uniform float uFogStart;
+        uniform float uFogEnd;
 
         out vec4 FragColor;
 
@@ -338,7 +358,12 @@ public sealed unsafe class TorvexRenderer : IDisposable
             float sunlight = max(dot(normal, -uLightDirection), 0.0);
 
             float lightAmount = uAmbientLight + sunlight * uSunStrength;
-            vec3 finalColor = vertexColor * lightAmount;
+            vec3 litColor = vertexColor * lightAmount;
+
+            float fogAmount = clamp((vertexFogDepth - uFogStart) / (uFogEnd - uFogStart), 0.0, 1.0);
+            fogAmount = fogAmount * fogAmount * (3.0 - 2.0 * fogAmount);
+
+            vec3 finalColor = mix(litColor, uFogColor, fogAmount);
 
             FragColor = vec4(finalColor, 1.0);
         }
@@ -367,9 +392,14 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _modelLocation = _gl.GetUniformLocation(_shaderProgram, "uModel");
         _viewLocation = _gl.GetUniformLocation(_shaderProgram, "uView");
         _projectionLocation = _gl.GetUniformLocation(_shaderProgram, "uProjection");
+
         _lightDirectionLocation = _gl.GetUniformLocation(_shaderProgram, "uLightDirection");
         _ambientLightLocation = _gl.GetUniformLocation(_shaderProgram, "uAmbientLight");
         _sunStrengthLocation = _gl.GetUniformLocation(_shaderProgram, "uSunStrength");
+
+        _fogColorLocation = _gl.GetUniformLocation(_shaderProgram, "uFogColor");
+        _fogStartLocation = _gl.GetUniformLocation(_shaderProgram, "uFogStart");
+        _fogEndLocation = _gl.GetUniformLocation(_shaderProgram, "uFogEnd");
     }
 
     private void CreateTerrainMesh()
