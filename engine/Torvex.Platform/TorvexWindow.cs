@@ -13,6 +13,7 @@ public sealed record TorvexWindowSettings(
 
 public sealed class TorvexWindow : IDisposable
 {
+    private readonly HashSet<Key> _keysDown = [];
     private IWindow? _window;
     private IInputContext? _input;
 
@@ -23,6 +24,11 @@ public sealed class TorvexWindow : IDisposable
     public event Action<double>? Updated;
     public event Action<double>? Rendered;
     public event Action? Closing;
+
+    public bool IsKeyDown(Key key)
+    {
+        return _keysDown.Contains(key);
+    }
 
     public void Run(TorvexWindowSettings settings)
     {
@@ -56,6 +62,7 @@ public sealed class TorvexWindow : IDisposable
         foreach (IKeyboard keyboard in _input.Keyboards)
         {
             keyboard.KeyDown += OnKeyDown;
+            keyboard.KeyUp += OnKeyUp;
         }
 
         Loaded?.Invoke();
@@ -63,10 +70,17 @@ public sealed class TorvexWindow : IDisposable
 
     private void OnKeyDown(IKeyboard keyboard, Key key, int keyCode)
     {
+        _keysDown.Add(key);
+
         if (key == Key.Escape)
         {
             NativeWindow.Close();
         }
+    }
+
+    private void OnKeyUp(IKeyboard keyboard, Key key, int keyCode)
+    {
+        _keysDown.Remove(key);
     }
 
     public void Dispose()

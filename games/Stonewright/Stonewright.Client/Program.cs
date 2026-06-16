@@ -17,6 +17,12 @@ window.Loaded += () =>
     renderer.Initialize();
 
     Console.WriteLine("Stonewright loaded.");
+    Console.WriteLine("Controls: WASD move | Space/Ctrl vertical | Arrow keys look | Shift fast | ESC close");
+};
+
+window.Updated += deltaTime =>
+{
+    renderer?.Update(deltaTime, window);
 };
 
 window.Rendered += deltaTime =>

@@ -1,7 +1,9 @@
 using System.Numerics;
+using Silk.NET.Input;
 using Silk.NET.Maths;
 using Silk.NET.OpenGL;
 using Silk.NET.Windowing;
+using Torvex.Platform;
 
 namespace Torvex.Graphics;
 
@@ -19,6 +21,10 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private int _projectionLocation;
 
     private float _time;
+
+    private Vector3 _cameraPosition = new(0f, 0f, 3f);
+    private float _cameraYaw;
+    private float _cameraPitch;
 
     public TorvexRenderer(IWindow window)
     {
@@ -58,9 +64,11 @@ public sealed unsafe class TorvexRenderer : IDisposable
             Matrix4x4.CreateRotationX(_time * 0.65f) *
             Matrix4x4.CreateRotationY(_time * 0.95f);
 
+        Vector3 cameraForward = GetCameraForward();
+
         Matrix4x4 view = Matrix4x4.CreateLookAt(
-            new Vector3(0f, 0f, 3f),
-            Vector3.Zero,
+            _cameraPosition,
+            _cameraPosition + cameraForward,
             Vector3.UnitY
         );
 
@@ -316,5 +324,79 @@ public sealed unsafe class TorvexRenderer : IDisposable
         }
 
         _gl.Dispose();
+    }
+
+    public void Update(double deltaTime, TorvexWindow input)
+    {
+        float dt = (float)deltaTime;
+
+        float lookSpeed = 1.8f;
+        float moveSpeed = input.IsKeyDown(Key.ShiftLeft) || input.IsKeyDown(Key.ShiftRight)
+            ? 7.5f
+            : 3.5f;
+
+        if (input.IsKeyDown(Key.Left))
+        {
+            _cameraYaw -= lookSpeed * dt;
+        }
+
+        if (input.IsKeyDown(Key.Right))
+        {
+            _cameraYaw += lookSpeed * dt;
+        }
+
+        if (input.IsKeyDown(Key.Up))
+        {
+            _cameraPitch += lookSpeed * dt;
+        }
+
+        if (input.IsKeyDown(Key.Down))
+        {
+            _cameraPitch -= lookSpeed * dt;
+        }
+
+        _cameraPitch = Math.Clamp(_cameraPitch, -1.45f, 1.45f);
+
+        Vector3 forward = GetCameraForward();
+        Vector3 right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitY));
+
+        if (input.IsKeyDown(Key.W))
+        {
+            _cameraPosition += forward * moveSpeed * dt;
+        }
+
+        if (input.IsKeyDown(Key.S))
+        {
+            _cameraPosition -= forward * moveSpeed * dt;
+        }
+
+        if (input.IsKeyDown(Key.D))
+        {
+            _cameraPosition += right * moveSpeed * dt;
+        }
+
+        if (input.IsKeyDown(Key.A))
+        {
+            _cameraPosition -= right * moveSpeed * dt;
+        }
+
+        if (input.IsKeyDown(Key.Space))
+        {
+            _cameraPosition += Vector3.UnitY * moveSpeed * dt;
+        }
+
+        if (input.IsKeyDown(Key.ControlLeft) || input.IsKeyDown(Key.ControlRight))
+        {
+            _cameraPosition -= Vector3.UnitY * moveSpeed * dt;
+        }
+    }
+
+    private Vector3 GetCameraForward()
+    {
+        return Vector3.Normalize(new Vector3(
+            MathF.Cos(_cameraPitch) * MathF.Sin(_cameraYaw),
+            MathF.Sin(_cameraPitch),
+            -MathF.Cos(_cameraPitch) * MathF.Cos(_cameraYaw)
+        ));
     }
 }
