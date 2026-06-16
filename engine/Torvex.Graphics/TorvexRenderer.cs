@@ -45,14 +45,18 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private int _skyMoonColorLocation;
     private int _skyMoonPositionLocation;
     private int _skyMoonVisibilityLocation;
+    private int _skyMoonPhaseLocation;
+    private int _skyAspectRatioLocation;
 
     private Vector3 _cameraPosition = new(0f, 3.5f, 8f);
     private float _cameraYaw;
     private float _cameraPitch = -0.22f;
     private const float FieldOfViewRadians = MathF.PI / 4f;
     private const float DayLengthSeconds = 180f;
+    private const float MoonCycleDays = 8f;
 
     private float _timeOfDay = 0.38f;
+    private float _moonCycle = 0.50f; // 0 new, 0.25 first quarter, 0.5 full, 0.75 last quarter
 
     public TorvexRenderer(IWindow window)
     {
@@ -157,6 +161,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
             : 1.0f;
 
         _timeOfDay = Wrap01(_timeOfDay + dt / DayLengthSeconds * timeScale);
+        _moonCycle = Wrap01(_moonCycle + dt / (DayLengthSeconds * MoonCycleDays) * timeScale);
     }
 
     public void Render(double deltaTime)
@@ -199,12 +204,17 @@ public sealed unsafe class TorvexRenderer : IDisposable
         Vector3 fogColor = GetSkyHorizonColor(sunElevation);
 
         float daylightAmount = SmoothStep(-0.05f, 0.35f, sunElevation);
-        float moonVisibility = SmoothStep(-0.03f, 0.22f, moonElevation) * (1.0f - daylightAmount);
+        float moonPhaseLight = GetMoonPhaseLight();
 
-        // Night stays dark. Moonlight helps silhouettes, but torches still matter.
-        float ambientLight = Lerp(0.018f, 0.35f, daylightAmount);
+        float moonVisibility =
+            SmoothStep(-0.03f, 0.22f, moonElevation) *
+            (1.0f - daylightAmount) *
+            moonPhaseLight;
+
+        // Night stays dark. Full moon helps silhouettes, but torches still matter.
+        float ambientLight = Lerp(0.012f, 0.35f, daylightAmount);
         float sunStrength = Lerp(0.0f, 0.90f, daylightAmount);
-        float moonStrength = 0.10f * moonVisibility;
+        float moonStrength = 0.075f * moonVisibility;
 
         DrawSky(
             cameraForward,
@@ -293,6 +303,8 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Uniform3(_skyMoonColorLocation, moonColor.X, moonColor.Y, moonColor.Z);
         _gl.Uniform2(_skyMoonPositionLocation, moonScreenPosition.X, moonScreenPosition.Y);
         _gl.Uniform1(_skyMoonVisibilityLocation, moonVisibility);
+        _gl.Uniform1(_skyMoonPhaseLocation, _moonCycle);
+        _gl.Uniform1(_skyAspectRatioLocation, aspectRatio);
 
         _gl.BindVertexArray(_skyVertexArray);
         _gl.DrawArrays(PrimitiveType.Triangles, 0, 3);
@@ -430,6 +442,9 @@ public sealed unsafe class TorvexRenderer : IDisposable
         uniform vec3 uSkyMoonColor;
         uniform vec2 uSkyMoonPosition;
         uniform float uSkyMoonVisibility;
+        uniform float uSkyMoonPhase;
+
+        uniform float uSkyAspectRatio;
 
         out vec4 FragColor;
 
@@ -438,7 +453,10 @@ public sealed unsafe class TorvexRenderer : IDisposable
             float heightBlend = smoothstep(0.0, 1.0, clamp(screenUv.y, 0.0, 1.0));
             vec3 skyColor = mix(uSkyHorizonColor, uSkyTopColor, heightBlend);
 
-            float sunDistance = distance(screenUv, uSkySunPosition);
+            vec2 sunDelta = screenUv - uSkySunPosition;
+            sunDelta.x *= uSkyAspectRatio;
+
+            float sunDistance = length(sunDelta);
 
             float sunDisc = 1.0 - smoothstep(uSkySunSize * 0.55, uSkySunSize, sunDistance);
             float sunCore = 1.0 - smoothstep(0.0, uSkySunSize * 0.55, sunDistance);
@@ -455,16 +473,34 @@ public sealed unsafe class TorvexRenderer : IDisposable
             skyColor = mix(skyColor, vec3(1.0, 0.94, 0.72), sunDisc * 0.88);
             skyColor += vec3(1.0, 0.96, 0.82) * sunCore * 0.22;
 
-            float moonDistance = distance(screenUv, uSkyMoonPosition);
+            vec2 moonDelta = screenUv - uSkyMoonPosition;
+            moonDelta.x *= uSkyAspectRatio;
 
-            float moonDisc = 1.0 - smoothstep(0.018, 0.034, moonDistance);
+            float moonDistance = length(moonDelta);
+
+            float moonRadius = 0.034;
+            float moonDisc = 1.0 - smoothstep(moonRadius * 0.86, moonRadius, moonDistance);
             float moonGlow = exp(-moonDistance * 16.0) * 0.13;
 
-            moonDisc *= uSkyMoonVisibility;
-            moonGlow *= uSkyMoonVisibility;
+            float phaseAngle = uSkyMoonPhase * 6.28318530718;
+            float litFraction = clamp(0.5 - 0.5 * cos(phaseAngle), 0.0, 1.0);
 
-            skyColor += uSkyMoonColor * moonGlow;
-            skyColor = mix(skyColor, uSkyMoonColor, moonDisc * 0.82);
+            float threshold = 1.0 - 2.0 * litFraction;
+            float localX = moonDelta.x / moonRadius;
+
+            float waxing = step(0.0, sin(phaseAngle));
+
+            float waxingLit = smoothstep(threshold - 0.08, threshold + 0.08, localX);
+            float waningLit = 1.0 - smoothstep(-threshold - 0.08, -threshold + 0.08, localX);
+
+            float phaseMask = mix(waningLit, waxingLit, waxing);
+
+            float moonLit = moonDisc * phaseMask * uSkyMoonVisibility;
+            float moonDark = moonDisc * (1.0 - phaseMask) * uSkyMoonVisibility * 0.20;
+
+            skyColor += uSkyMoonColor * moonGlow * uSkyMoonVisibility;
+            skyColor = mix(skyColor, uSkyMoonColor, moonLit * 0.86);
+            skyColor = mix(skyColor, uSkyMoonColor * 0.16, moonDark);
 
             FragColor = vec4(skyColor, 1.0);
         }
@@ -501,6 +537,9 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _skyMoonColorLocation = _gl.GetUniformLocation(_skyShaderProgram, "uSkyMoonColor");
         _skyMoonPositionLocation = _gl.GetUniformLocation(_skyShaderProgram, "uSkyMoonPosition");
         _skyMoonVisibilityLocation = _gl.GetUniformLocation(_skyShaderProgram, "uSkyMoonVisibility");
+        _skyMoonPhaseLocation = _gl.GetUniformLocation(_skyShaderProgram, "uSkyMoonPhase");
+
+        _skyAspectRatioLocation = _gl.GetUniformLocation(_skyShaderProgram, "uSkyAspectRatio");
     }
 
     private void CreateTerrainShader()
@@ -794,15 +833,23 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
     private Vector3 GetMoonDirection()
     {
-        // Simple opposite-sun moon path for now.
-        // Later we can add real moon phases/orbital offset.
-        float angle = (_timeOfDay + 0.25f) * MathF.Tau;
+        // Moon angle is offset from the sun by the lunar phase.
+        // 0.0 = new moon near sun
+        // 0.5 = full moon opposite sun
+        float sunAngle = (_timeOfDay - 0.25f) * MathF.Tau;
+        float moonAngle = sunAngle + _moonCycle * MathF.Tau;
 
         return Vector3.Normalize(new Vector3(
-            MathF.Cos(angle),
-            MathF.Sin(angle),
+            MathF.Cos(moonAngle),
+            MathF.Sin(moonAngle),
             0.18f
         ));
+    }
+
+    private float GetMoonPhaseLight()
+    {
+        // 0 new moon, 1 full moon
+        return 0.5f - 0.5f * MathF.Cos(_moonCycle * MathF.Tau);
     }
 
     private Vector2 ProjectDirectionToSkyUv(
