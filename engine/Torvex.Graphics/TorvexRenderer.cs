@@ -24,6 +24,9 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private int _modelLocation;
     private int _viewLocation;
     private int _projectionLocation;
+    private int _lightDirectionLocation;
+    private int _ambientLightLocation;
+    private int _sunStrengthLocation;
 
     private Vector3 _cameraPosition = new(0f, 3.5f, 8f);
     private float _cameraYaw;
@@ -43,7 +46,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
         SetViewport(_window.FramebufferSize);
         _window.FramebufferResize += SetViewport;
 
-        _gl.ClearColor(0.06f, 0.07f, 0.09f, 1.0f);
+        _gl.ClearColor(0.42f, 0.58f, 0.78f, 1.0f);
         _gl.Enable(EnableCap.DepthTest);
         _gl.Disable(EnableCap.CullFace);
 
@@ -53,6 +56,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         Console.WriteLine($"Graphics initialized. Framebuffer: {_window.FramebufferSize.X}x{_window.FramebufferSize.Y}");
         Console.WriteLine($"Terrain mesh generated. Vertices: {_terrainVertexCount}");
+        Console.WriteLine("Sun lighting enabled.");
     }
 
     public void Update(double deltaTime, TorvexWindow input)
@@ -155,10 +159,16 @@ public sealed unsafe class TorvexRenderer : IDisposable
             1000f
         );
 
+        Vector3 lightDirection = Vector3.Normalize(new Vector3(-0.35f, -0.85f, -0.45f));
+
         _gl.UseProgram(_shaderProgram);
 
         SetMatrix4(_viewLocation, view);
         SetMatrix4(_projectionLocation, projection);
+
+        _gl.Uniform3(_lightDirectionLocation, lightDirection.X, lightDirection.Y, lightDirection.Z);
+        _gl.Uniform1(_ambientLightLocation, 0.34f);
+        _gl.Uniform1(_sunStrengthLocation, 0.82f);
 
         DrawTerrain();
         DrawTestMesh();
@@ -229,6 +239,22 @@ public sealed unsafe class TorvexRenderer : IDisposable
         return rolling + secondary + detail + valley;
     }
 
+    private Vector3 GetTerrainNormal(float x, float z)
+    {
+        const float sampleDistance = 0.75f;
+
+        float left = GetTerrainHeight(x - sampleDistance, z);
+        float right = GetTerrainHeight(x + sampleDistance, z);
+        float down = GetTerrainHeight(x, z - sampleDistance);
+        float up = GetTerrainHeight(x, z + sampleDistance);
+
+        return Vector3.Normalize(new Vector3(
+            left - right,
+            sampleDistance * 2.0f,
+            down - up
+        ));
+    }
+
     private Vector3 GetTerrainColor(float height)
     {
         Vector3 lowGrass = new(0.24f, 0.34f, 0.20f);
@@ -255,18 +281,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
         return Lerp(dirt, stone, SmoothStep(1.45f, 2.4f, height));
     }
 
-    private static Vector3 Lerp(Vector3 a, Vector3 b, float t)
-    {
-        t = Math.Clamp(t, 0f, 1f);
-        return a + (b - a) * t;
-    }
-
-    private static float SmoothStep(float edge0, float edge1, float value)
-    {
-        float t = Math.Clamp((value - edge0) / (edge1 - edge0), 0f, 1f);
-        return t * t * (3f - 2f * t);
-    }
-
     private void SetViewport(Vector2D<int> size)
     {
         if (_gl is null)
@@ -288,17 +302,20 @@ public sealed unsafe class TorvexRenderer : IDisposable
         #version 330 core
 
         layout (location = 0) in vec3 aPosition;
-        layout (location = 1) in vec3 aColor;
+        layout (location = 1) in vec3 aNormal;
+        layout (location = 2) in vec3 aColor;
 
         uniform mat4 uModel;
         uniform mat4 uView;
         uniform mat4 uProjection;
 
+        out vec3 vertexNormal;
         out vec3 vertexColor;
 
         void main()
         {
             vertexColor = aColor;
+            vertexNormal = normalize(mat3(uModel) * aNormal);
             gl_Position = uProjection * uView * uModel * vec4(aPosition, 1.0);
         }
         """;
@@ -306,12 +323,24 @@ public sealed unsafe class TorvexRenderer : IDisposable
         const string fragmentShaderSource = """
         #version 330 core
 
+        in vec3 vertexNormal;
         in vec3 vertexColor;
+
+        uniform vec3 uLightDirection;
+        uniform float uAmbientLight;
+        uniform float uSunStrength;
+
         out vec4 FragColor;
 
         void main()
         {
-            FragColor = vec4(vertexColor, 1.0);
+            vec3 normal = normalize(vertexNormal);
+            float sunlight = max(dot(normal, -uLightDirection), 0.0);
+
+            float lightAmount = uAmbientLight + sunlight * uSunStrength;
+            vec3 finalColor = vertexColor * lightAmount;
+
+            FragColor = vec4(finalColor, 1.0);
         }
         """;
 
@@ -338,6 +367,9 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _modelLocation = _gl.GetUniformLocation(_shaderProgram, "uModel");
         _viewLocation = _gl.GetUniformLocation(_shaderProgram, "uView");
         _projectionLocation = _gl.GetUniformLocation(_shaderProgram, "uProjection");
+        _lightDirectionLocation = _gl.GetUniformLocation(_shaderProgram, "uLightDirection");
+        _ambientLightLocation = _gl.GetUniformLocation(_shaderProgram, "uAmbientLight");
+        _sunStrengthLocation = _gl.GetUniformLocation(_shaderProgram, "uSunStrength");
     }
 
     private void CreateTerrainMesh()
@@ -363,7 +395,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
             }
         }
 
-        _terrainVertexCount = vertices.Count / 6;
+        _terrainVertexCount = vertices.Count / 9;
 
         CreateVertexObjects(vertices.ToArray(), out _terrainVertexArray, out _terrainVertexBuffer);
     }
@@ -378,65 +410,104 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private void AddTerrainVertex(List<float> vertices, float x, float z)
     {
         float y = GetTerrainHeight(x, z);
+        Vector3 normal = GetTerrainNormal(x, z);
         Vector3 color = GetTerrainColor(y);
 
-        vertices.Add(x);
-        vertices.Add(y);
-        vertices.Add(z);
-
-        vertices.Add(color.X);
-        vertices.Add(color.Y);
-        vertices.Add(color.Z);
+        AddVertex(vertices, new Vector3(x, y, z), normal, color);
     }
 
     private void CreateTestMesh()
     {
-        float[] vertices =
-        [
-            -0.5f, -0.5f,  0.5f,    0.68f, 0.48f, 0.30f,
-             0.5f, -0.5f,  0.5f,    0.68f, 0.48f, 0.30f,
-             0.5f,  0.5f,  0.5f,    0.78f, 0.58f, 0.38f,
-             0.5f,  0.5f,  0.5f,    0.78f, 0.58f, 0.38f,
-            -0.5f,  0.5f,  0.5f,    0.78f, 0.58f, 0.38f,
-            -0.5f, -0.5f,  0.5f,    0.68f, 0.48f, 0.30f,
+        List<float> vertices = [];
 
-            -0.5f, -0.5f, -0.5f,    0.28f, 0.28f, 0.32f,
-            -0.5f,  0.5f, -0.5f,    0.38f, 0.38f, 0.42f,
-             0.5f,  0.5f, -0.5f,    0.38f, 0.38f, 0.42f,
-             0.5f,  0.5f, -0.5f,    0.38f, 0.38f, 0.42f,
-             0.5f, -0.5f, -0.5f,    0.28f, 0.28f, 0.32f,
-            -0.5f, -0.5f, -0.5f,    0.28f, 0.28f, 0.32f,
+        Vector3 brown = new(0.68f, 0.48f, 0.30f);
+        Vector3 tan = new(0.78f, 0.62f, 0.38f);
+        Vector3 green = new(0.46f, 0.58f, 0.36f);
+        Vector3 blueGray = new(0.34f, 0.40f, 0.52f);
+        Vector3 dark = new(0.18f, 0.18f, 0.20f);
 
-            -0.5f,  0.5f,  0.5f,    0.50f, 0.62f, 0.38f,
-            -0.5f,  0.5f, -0.5f,    0.50f, 0.62f, 0.38f,
-            -0.5f, -0.5f, -0.5f,    0.34f, 0.46f, 0.28f,
-            -0.5f, -0.5f, -0.5f,    0.34f, 0.46f, 0.28f,
-            -0.5f, -0.5f,  0.5f,    0.34f, 0.46f, 0.28f,
-            -0.5f,  0.5f,  0.5f,    0.50f, 0.62f, 0.38f,
+        AddFace(vertices,
+            new Vector3(-0.5f, -0.5f, 0.5f),
+            new Vector3(0.5f, -0.5f, 0.5f),
+            new Vector3(0.5f, 0.5f, 0.5f),
+            new Vector3(-0.5f, 0.5f, 0.5f),
+            new Vector3(0f, 0f, 1f),
+            tan);
 
-             0.5f,  0.5f,  0.5f,    0.46f, 0.56f, 0.76f,
-             0.5f, -0.5f, -0.5f,    0.30f, 0.40f, 0.58f,
-             0.5f,  0.5f, -0.5f,    0.46f, 0.56f, 0.76f,
-             0.5f, -0.5f, -0.5f,    0.30f, 0.40f, 0.58f,
-             0.5f,  0.5f,  0.5f,    0.46f, 0.56f, 0.76f,
-             0.5f, -0.5f,  0.5f,    0.30f, 0.40f, 0.58f,
+        AddFace(vertices,
+            new Vector3(0.5f, -0.5f, -0.5f),
+            new Vector3(-0.5f, -0.5f, -0.5f),
+            new Vector3(-0.5f, 0.5f, -0.5f),
+            new Vector3(0.5f, 0.5f, -0.5f),
+            new Vector3(0f, 0f, -1f),
+            dark);
 
-            -0.5f,  0.5f, -0.5f,    0.76f, 0.66f, 0.36f,
-            -0.5f,  0.5f,  0.5f,    0.76f, 0.66f, 0.36f,
-             0.5f,  0.5f,  0.5f,    0.76f, 0.66f, 0.36f,
-             0.5f,  0.5f,  0.5f,    0.76f, 0.66f, 0.36f,
-             0.5f,  0.5f, -0.5f,    0.76f, 0.66f, 0.36f,
-            -0.5f,  0.5f, -0.5f,    0.76f, 0.66f, 0.36f,
+        AddFace(vertices,
+            new Vector3(-0.5f, -0.5f, -0.5f),
+            new Vector3(-0.5f, -0.5f, 0.5f),
+            new Vector3(-0.5f, 0.5f, 0.5f),
+            new Vector3(-0.5f, 0.5f, -0.5f),
+            new Vector3(-1f, 0f, 0f),
+            green);
 
-            -0.5f, -0.5f, -0.5f,    0.18f, 0.18f, 0.20f,
-             0.5f, -0.5f,  0.5f,    0.18f, 0.18f, 0.20f,
-            -0.5f, -0.5f,  0.5f,    0.18f, 0.18f, 0.20f,
-             0.5f, -0.5f,  0.5f,    0.18f, 0.18f, 0.20f,
-            -0.5f, -0.5f, -0.5f,    0.18f, 0.18f, 0.20f,
-             0.5f, -0.5f, -0.5f,    0.18f, 0.18f, 0.20f,
-        ];
+        AddFace(vertices,
+            new Vector3(0.5f, -0.5f, 0.5f),
+            new Vector3(0.5f, -0.5f, -0.5f),
+            new Vector3(0.5f, 0.5f, -0.5f),
+            new Vector3(0.5f, 0.5f, 0.5f),
+            new Vector3(1f, 0f, 0f),
+            blueGray);
 
-        CreateVertexObjects(vertices, out _testVertexArray, out _testVertexBuffer);
+        AddFace(vertices,
+            new Vector3(-0.5f, 0.5f, 0.5f),
+            new Vector3(0.5f, 0.5f, 0.5f),
+            new Vector3(0.5f, 0.5f, -0.5f),
+            new Vector3(-0.5f, 0.5f, -0.5f),
+            new Vector3(0f, 1f, 0f),
+            tan);
+
+        AddFace(vertices,
+            new Vector3(-0.5f, -0.5f, -0.5f),
+            new Vector3(0.5f, -0.5f, -0.5f),
+            new Vector3(0.5f, -0.5f, 0.5f),
+            new Vector3(-0.5f, -0.5f, 0.5f),
+            new Vector3(0f, -1f, 0f),
+            brown);
+
+        CreateVertexObjects(vertices.ToArray(), out _testVertexArray, out _testVertexBuffer);
+    }
+
+    private static void AddFace(
+        List<float> vertices,
+        Vector3 a,
+        Vector3 b,
+        Vector3 c,
+        Vector3 d,
+        Vector3 normal,
+        Vector3 color)
+    {
+        AddVertex(vertices, a, normal, color);
+        AddVertex(vertices, b, normal, color);
+        AddVertex(vertices, c, normal, color);
+
+        AddVertex(vertices, c, normal, color);
+        AddVertex(vertices, d, normal, color);
+        AddVertex(vertices, a, normal, color);
+    }
+
+    private static void AddVertex(List<float> vertices, Vector3 position, Vector3 normal, Vector3 color)
+    {
+        vertices.Add(position.X);
+        vertices.Add(position.Y);
+        vertices.Add(position.Z);
+
+        vertices.Add(normal.X);
+        vertices.Add(normal.Y);
+        vertices.Add(normal.Z);
+
+        vertices.Add(color.X);
+        vertices.Add(color.Y);
+        vertices.Add(color.Z);
     }
 
     private void CreateVertexObjects(float[] vertices, out uint vertexArray, out uint vertexBuffer)
@@ -462,13 +533,16 @@ public sealed unsafe class TorvexRenderer : IDisposable
             );
         }
 
-        const uint stride = 6 * sizeof(float);
+        const uint stride = 9 * sizeof(float);
 
         _gl.EnableVertexAttribArray(0);
         _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, (void*)0);
 
         _gl.EnableVertexAttribArray(1);
         _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, (void*)(3 * sizeof(float)));
+
+        _gl.EnableVertexAttribArray(2);
+        _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, stride, (void*)(6 * sizeof(float)));
 
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
         _gl.BindVertexArray(0);
@@ -514,6 +588,18 @@ public sealed unsafe class TorvexRenderer : IDisposable
         }
 
         return shader;
+    }
+
+    private static Vector3 Lerp(Vector3 a, Vector3 b, float t)
+    {
+        t = Math.Clamp(t, 0f, 1f);
+        return a + (b - a) * t;
+    }
+
+    private static float SmoothStep(float edge0, float edge1, float value)
+    {
+        float t = Math.Clamp((value - edge0) / (edge1 - edge0), 0f, 1f);
+        return t * t * (3f - 2f * t);
     }
 
     public void Dispose()
