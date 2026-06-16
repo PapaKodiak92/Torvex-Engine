@@ -22,6 +22,8 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private readonly IWindow _window;
     private GL? _gl;
 
+    private WorldPrecipitationRenderer? _worldPrecipitationRenderer;
+
     private uint _terrainVertexArray;
     private uint _terrainVertexBuffer;
     private int _terrainVertexCount;
@@ -113,8 +115,11 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Enable(EnableCap.Blend);
         _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
+        _worldPrecipitationRenderer = new WorldPrecipitationRenderer(_gl);
+        _worldPrecipitationRenderer.Initialize();
+
         CreateSkyShader();
-        CreatePrecipitationShader();
+        // CreatePrecipitationShader(); // disabled: old screen-space precipitation overlay
         CreateSkyMesh();
 
         CreateTerrainShader();
@@ -329,7 +334,18 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Uniform1(_fogEndLocation, Lerp(170.0f, 38.0f, effectiveFog));
 
         DrawTerrain();
-        // DrawPrecipitation(); // disabled: screen-space overlay is not real weather
+
+        _worldPrecipitationRenderer?.Render(
+            _cameraPosition,
+            cameraForward,
+            view,
+            projection,
+            _precipitationIntensity,
+            _temperatureC <= 0.0f,
+            _windDirection,
+            _windStrength,
+            _weatherTime
+        );
     }
 
     private void ApplyWeatherPreset(WeatherType weatherType, bool log = true)
@@ -1407,6 +1423,9 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         _window.FramebufferResize -= SetViewport;
 
+        _worldPrecipitationRenderer?.Dispose();
+        _worldPrecipitationRenderer = null;
+
         if (_terrainVertexBuffer != 0)
         {
             _gl.DeleteBuffer(_terrainVertexBuffer);
@@ -1445,3 +1464,10 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Dispose();
     }
 }
+
+
+
+
+
+
+
