@@ -330,6 +330,13 @@ public sealed unsafe class TorvexRenderer : IDisposable
     {
         float dt = (float)deltaTime;
 
+        Vector2 mouseDelta = input.ConsumeMouseDelta();
+
+        const float mouseSensitivity = 0.0022f;
+
+        _cameraYaw += mouseDelta.X * mouseSensitivity;
+        _cameraPitch -= mouseDelta.Y * mouseSensitivity;
+
         float lookSpeed = 1.8f;
         float moveSpeed = input.IsKeyDown(Key.ShiftLeft) || input.IsKeyDown(Key.ShiftRight)
             ? 7.5f
