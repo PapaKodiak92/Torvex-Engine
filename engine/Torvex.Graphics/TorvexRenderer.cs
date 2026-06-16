@@ -12,19 +12,23 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private readonly IWindow _window;
     private GL? _gl;
 
-    private uint _vertexArray;
-    private uint _vertexBuffer;
+    private uint _cubeVertexArray;
+    private uint _cubeVertexBuffer;
+
+    private uint _groundVertexArray;
+    private uint _groundVertexBuffer;
+
     private uint _shaderProgram;
 
     private int _modelLocation;
     private int _viewLocation;
     private int _projectionLocation;
 
-    private float _time;
-
-    private Vector3 _cameraPosition = new(0f, 0f, 3f);
+    private Vector3 _cameraPosition = new(0f, 1.2f, 5f);
     private float _cameraYaw;
-    private float _cameraPitch;
+    private float _cameraPitch = -0.12f;
+
+    private float _time;
 
     public TorvexRenderer(IWindow window)
     {
@@ -42,9 +46,83 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Enable(EnableCap.DepthTest);
         _gl.Disable(EnableCap.CullFace);
 
-        CreateMesh();
+        CreateShader();
+        CreateCubeMesh();
+        CreateGroundMesh();
 
         Console.WriteLine($"Graphics initialized. Framebuffer: {_window.FramebufferSize.X}x{_window.FramebufferSize.Y}");
+    }
+
+    public void Update(double deltaTime, TorvexWindow input)
+    {
+        float dt = (float)deltaTime;
+
+        Vector2 mouseDelta = input.ConsumeMouseDelta();
+
+        const float mouseSensitivity = 0.0022f;
+
+        _cameraYaw += mouseDelta.X * mouseSensitivity;
+        _cameraPitch -= mouseDelta.Y * mouseSensitivity;
+
+        float lookSpeed = 1.8f;
+        float moveSpeed = input.IsKeyDown(Key.ShiftLeft) || input.IsKeyDown(Key.ShiftRight)
+            ? 8.5f
+            : 4.0f;
+
+        if (input.IsKeyDown(Key.Left))
+        {
+            _cameraYaw -= lookSpeed * dt;
+        }
+
+        if (input.IsKeyDown(Key.Right))
+        {
+            _cameraYaw += lookSpeed * dt;
+        }
+
+        if (input.IsKeyDown(Key.Up))
+        {
+            _cameraPitch += lookSpeed * dt;
+        }
+
+        if (input.IsKeyDown(Key.Down))
+        {
+            _cameraPitch -= lookSpeed * dt;
+        }
+
+        _cameraPitch = Math.Clamp(_cameraPitch, -1.45f, 1.45f);
+
+        Vector3 forward = GetCameraForward();
+        Vector3 right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitY));
+
+        if (input.IsKeyDown(Key.W))
+        {
+            _cameraPosition += forward * moveSpeed * dt;
+        }
+
+        if (input.IsKeyDown(Key.S))
+        {
+            _cameraPosition -= forward * moveSpeed * dt;
+        }
+
+        if (input.IsKeyDown(Key.D))
+        {
+            _cameraPosition += right * moveSpeed * dt;
+        }
+
+        if (input.IsKeyDown(Key.A))
+        {
+            _cameraPosition -= right * moveSpeed * dt;
+        }
+
+        if (input.IsKeyDown(Key.Space))
+        {
+            _cameraPosition += Vector3.UnitY * moveSpeed * dt;
+        }
+
+        if (input.IsKeyDown(Key.ControlLeft) || input.IsKeyDown(Key.ControlRight))
+        {
+            _cameraPosition -= Vector3.UnitY * moveSpeed * dt;
+        }
     }
 
     public void Render(double deltaTime)
@@ -60,10 +138,6 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         float aspectRatio = MathF.Max(1f, _window.FramebufferSize.X) / MathF.Max(1f, _window.FramebufferSize.Y);
 
-        Matrix4x4 model =
-            Matrix4x4.CreateRotationX(_time * 0.65f) *
-            Matrix4x4.CreateRotationY(_time * 0.95f);
-
         Vector3 cameraForward = GetCameraForward();
 
         Matrix4x4 view = Matrix4x4.CreateLookAt(
@@ -76,18 +150,60 @@ public sealed unsafe class TorvexRenderer : IDisposable
             MathF.PI / 4f,
             aspectRatio,
             0.1f,
-            100f
+            500f
         );
 
         _gl.UseProgram(_shaderProgram);
 
-        SetMatrix4(_modelLocation, model);
         SetMatrix4(_viewLocation, view);
         SetMatrix4(_projectionLocation, projection);
 
-        _gl.BindVertexArray(_vertexArray);
+        DrawGround();
+        DrawTestMesh();
+    }
+
+    private void DrawGround()
+    {
+        if (_gl is null)
+        {
+            return;
+        }
+
+        Matrix4x4 model = Matrix4x4.Identity;
+
+        SetMatrix4(_modelLocation, model);
+
+        _gl.BindVertexArray(_groundVertexArray);
+        _gl.DrawArrays(PrimitiveType.Triangles, 0, 6);
+        _gl.BindVertexArray(0);
+    }
+
+    private void DrawTestMesh()
+    {
+        if (_gl is null)
+        {
+            return;
+        }
+
+        Matrix4x4 model =
+            Matrix4x4.CreateScale(1.2f, 1.0f, 1.2f) *
+            Matrix4x4.CreateRotationY(_time * 0.45f) *
+            Matrix4x4.CreateTranslation(0f, 0.5f, 0f);
+
+        SetMatrix4(_modelLocation, model);
+
+        _gl.BindVertexArray(_cubeVertexArray);
         _gl.DrawArrays(PrimitiveType.Triangles, 0, 36);
         _gl.BindVertexArray(0);
+    }
+
+    private Vector3 GetCameraForward()
+    {
+        return Vector3.Normalize(new Vector3(
+            MathF.Cos(_cameraPitch) * MathF.Sin(_cameraYaw),
+            MathF.Sin(_cameraPitch),
+            -MathF.Cos(_cameraPitch) * MathF.Cos(_cameraYaw)
+        ));
     }
 
     private void SetViewport(Vector2D<int> size)
@@ -100,65 +216,12 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Viewport(0, 0, (uint)Math.Max(1, size.X), (uint)Math.Max(1, size.Y));
     }
 
-    private void CreateMesh()
+    private void CreateShader()
     {
         if (_gl is null)
         {
             throw new InvalidOperationException("OpenGL has not been initialized.");
         }
-
-        float[] vertices =
-        [
-            // position              // color
-
-            // front
-            -0.5f, -0.5f,  0.5f,    0.90f, 0.62f, 0.25f,
-             0.5f, -0.5f,  0.5f,    0.90f, 0.62f, 0.25f,
-             0.5f,  0.5f,  0.5f,    0.90f, 0.62f, 0.25f,
-             0.5f,  0.5f,  0.5f,    0.90f, 0.62f, 0.25f,
-            -0.5f,  0.5f,  0.5f,    0.90f, 0.62f, 0.25f,
-            -0.5f, -0.5f,  0.5f,    0.90f, 0.62f, 0.25f,
-
-            // back
-            -0.5f, -0.5f, -0.5f,    0.45f, 0.50f, 0.60f,
-            -0.5f,  0.5f, -0.5f,    0.45f, 0.50f, 0.60f,
-             0.5f,  0.5f, -0.5f,    0.45f, 0.50f, 0.60f,
-             0.5f,  0.5f, -0.5f,    0.45f, 0.50f, 0.60f,
-             0.5f, -0.5f, -0.5f,    0.45f, 0.50f, 0.60f,
-            -0.5f, -0.5f, -0.5f,    0.45f, 0.50f, 0.60f,
-
-            // left
-            -0.5f,  0.5f,  0.5f,    0.55f, 0.72f, 0.38f,
-            -0.5f,  0.5f, -0.5f,    0.55f, 0.72f, 0.38f,
-            -0.5f, -0.5f, -0.5f,    0.55f, 0.72f, 0.38f,
-            -0.5f, -0.5f, -0.5f,    0.55f, 0.72f, 0.38f,
-            -0.5f, -0.5f,  0.5f,    0.55f, 0.72f, 0.38f,
-            -0.5f,  0.5f,  0.5f,    0.55f, 0.72f, 0.38f,
-
-            // right
-             0.5f,  0.5f,  0.5f,    0.35f, 0.55f, 0.95f,
-             0.5f, -0.5f, -0.5f,    0.35f, 0.55f, 0.95f,
-             0.5f,  0.5f, -0.5f,    0.35f, 0.55f, 0.95f,
-             0.5f, -0.5f, -0.5f,    0.35f, 0.55f, 0.95f,
-             0.5f,  0.5f,  0.5f,    0.35f, 0.55f, 0.95f,
-             0.5f, -0.5f,  0.5f,    0.35f, 0.55f, 0.95f,
-
-            // top
-            -0.5f,  0.5f, -0.5f,    0.85f, 0.72f, 0.28f,
-            -0.5f,  0.5f,  0.5f,    0.85f, 0.72f, 0.28f,
-             0.5f,  0.5f,  0.5f,    0.85f, 0.72f, 0.28f,
-             0.5f,  0.5f,  0.5f,    0.85f, 0.72f, 0.28f,
-             0.5f,  0.5f, -0.5f,    0.85f, 0.72f, 0.28f,
-            -0.5f,  0.5f, -0.5f,    0.85f, 0.72f, 0.28f,
-
-            // bottom
-            -0.5f, -0.5f, -0.5f,    0.32f, 0.32f, 0.36f,
-             0.5f, -0.5f,  0.5f,    0.32f, 0.32f, 0.36f,
-            -0.5f, -0.5f,  0.5f,    0.32f, 0.32f, 0.36f,
-             0.5f, -0.5f,  0.5f,    0.32f, 0.32f, 0.36f,
-            -0.5f, -0.5f, -0.5f,    0.32f, 0.32f, 0.36f,
-             0.5f, -0.5f, -0.5f,    0.32f, 0.32f, 0.36f,
-        ];
 
         const string vertexShaderSource = """
         #version 330 core
@@ -214,12 +277,98 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _modelLocation = _gl.GetUniformLocation(_shaderProgram, "uModel");
         _viewLocation = _gl.GetUniformLocation(_shaderProgram, "uView");
         _projectionLocation = _gl.GetUniformLocation(_shaderProgram, "uProjection");
+    }
 
-        _vertexArray = _gl.GenVertexArray();
-        _vertexBuffer = _gl.GenBuffer();
+    private void CreateCubeMesh()
+    {
+        if (_gl is null)
+        {
+            throw new InvalidOperationException("OpenGL has not been initialized.");
+        }
 
-        _gl.BindVertexArray(_vertexArray);
-        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vertexBuffer);
+        float[] vertices =
+        [
+            -0.5f, -0.5f,  0.5f,    0.68f, 0.48f, 0.30f,
+             0.5f, -0.5f,  0.5f,    0.68f, 0.48f, 0.30f,
+             0.5f,  0.5f,  0.5f,    0.78f, 0.58f, 0.38f,
+             0.5f,  0.5f,  0.5f,    0.78f, 0.58f, 0.38f,
+            -0.5f,  0.5f,  0.5f,    0.78f, 0.58f, 0.38f,
+            -0.5f, -0.5f,  0.5f,    0.68f, 0.48f, 0.30f,
+
+            -0.5f, -0.5f, -0.5f,    0.28f, 0.28f, 0.32f,
+            -0.5f,  0.5f, -0.5f,    0.38f, 0.38f, 0.42f,
+             0.5f,  0.5f, -0.5f,    0.38f, 0.38f, 0.42f,
+             0.5f,  0.5f, -0.5f,    0.38f, 0.38f, 0.42f,
+             0.5f, -0.5f, -0.5f,    0.28f, 0.28f, 0.32f,
+            -0.5f, -0.5f, -0.5f,    0.28f, 0.28f, 0.32f,
+
+            -0.5f,  0.5f,  0.5f,    0.50f, 0.62f, 0.38f,
+            -0.5f,  0.5f, -0.5f,    0.50f, 0.62f, 0.38f,
+            -0.5f, -0.5f, -0.5f,    0.34f, 0.46f, 0.28f,
+            -0.5f, -0.5f, -0.5f,    0.34f, 0.46f, 0.28f,
+            -0.5f, -0.5f,  0.5f,    0.34f, 0.46f, 0.28f,
+            -0.5f,  0.5f,  0.5f,    0.50f, 0.62f, 0.38f,
+
+             0.5f,  0.5f,  0.5f,    0.46f, 0.56f, 0.76f,
+             0.5f, -0.5f, -0.5f,    0.30f, 0.40f, 0.58f,
+             0.5f,  0.5f, -0.5f,    0.46f, 0.56f, 0.76f,
+             0.5f, -0.5f, -0.5f,    0.30f, 0.40f, 0.58f,
+             0.5f,  0.5f,  0.5f,    0.46f, 0.56f, 0.76f,
+             0.5f, -0.5f,  0.5f,    0.30f, 0.40f, 0.58f,
+
+            -0.5f,  0.5f, -0.5f,    0.76f, 0.66f, 0.36f,
+            -0.5f,  0.5f,  0.5f,    0.76f, 0.66f, 0.36f,
+             0.5f,  0.5f,  0.5f,    0.76f, 0.66f, 0.36f,
+             0.5f,  0.5f,  0.5f,    0.76f, 0.66f, 0.36f,
+             0.5f,  0.5f, -0.5f,    0.76f, 0.66f, 0.36f,
+            -0.5f,  0.5f, -0.5f,    0.76f, 0.66f, 0.36f,
+
+            -0.5f, -0.5f, -0.5f,    0.18f, 0.18f, 0.20f,
+             0.5f, -0.5f,  0.5f,    0.18f, 0.18f, 0.20f,
+            -0.5f, -0.5f,  0.5f,    0.18f, 0.18f, 0.20f,
+             0.5f, -0.5f,  0.5f,    0.18f, 0.18f, 0.20f,
+            -0.5f, -0.5f, -0.5f,    0.18f, 0.18f, 0.20f,
+             0.5f, -0.5f, -0.5f,    0.18f, 0.18f, 0.20f,
+        ];
+
+        CreateVertexObjects(vertices, out _cubeVertexArray, out _cubeVertexBuffer);
+    }
+
+    private void CreateGroundMesh()
+    {
+        if (_gl is null)
+        {
+            throw new InvalidOperationException("OpenGL has not been initialized.");
+        }
+
+        float size = 24f;
+
+        float[] vertices =
+        [
+            -size, 0f, -size,   0.22f, 0.30f, 0.22f,
+             size, 0f, -size,   0.22f, 0.30f, 0.22f,
+             size, 0f,  size,   0.28f, 0.38f, 0.26f,
+
+             size, 0f,  size,   0.28f, 0.38f, 0.26f,
+            -size, 0f,  size,   0.28f, 0.38f, 0.26f,
+            -size, 0f, -size,   0.22f, 0.30f, 0.22f,
+        ];
+
+        CreateVertexObjects(vertices, out _groundVertexArray, out _groundVertexBuffer);
+    }
+
+    private void CreateVertexObjects(float[] vertices, out uint vertexArray, out uint vertexBuffer)
+    {
+        if (_gl is null)
+        {
+            throw new InvalidOperationException("OpenGL has not been initialized.");
+        }
+
+        vertexArray = _gl.GenVertexArray();
+        vertexBuffer = _gl.GenBuffer();
+
+        _gl.BindVertexArray(vertexArray);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, vertexBuffer);
 
         fixed (float* vertexData = vertices)
         {
@@ -308,14 +457,24 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         _window.FramebufferResize -= SetViewport;
 
-        if (_vertexBuffer != 0)
+        if (_cubeVertexBuffer != 0)
         {
-            _gl.DeleteBuffer(_vertexBuffer);
+            _gl.DeleteBuffer(_cubeVertexBuffer);
         }
 
-        if (_vertexArray != 0)
+        if (_cubeVertexArray != 0)
         {
-            _gl.DeleteVertexArray(_vertexArray);
+            _gl.DeleteVertexArray(_cubeVertexArray);
+        }
+
+        if (_groundVertexBuffer != 0)
+        {
+            _gl.DeleteBuffer(_groundVertexBuffer);
+        }
+
+        if (_groundVertexArray != 0)
+        {
+            _gl.DeleteVertexArray(_groundVertexArray);
         }
 
         if (_shaderProgram != 0)
@@ -324,86 +483,5 @@ public sealed unsafe class TorvexRenderer : IDisposable
         }
 
         _gl.Dispose();
-    }
-
-    public void Update(double deltaTime, TorvexWindow input)
-    {
-        float dt = (float)deltaTime;
-
-        Vector2 mouseDelta = input.ConsumeMouseDelta();
-
-        const float mouseSensitivity = 0.0022f;
-
-        _cameraYaw += mouseDelta.X * mouseSensitivity;
-        _cameraPitch -= mouseDelta.Y * mouseSensitivity;
-
-        float lookSpeed = 1.8f;
-        float moveSpeed = input.IsKeyDown(Key.ShiftLeft) || input.IsKeyDown(Key.ShiftRight)
-            ? 7.5f
-            : 3.5f;
-
-        if (input.IsKeyDown(Key.Left))
-        {
-            _cameraYaw -= lookSpeed * dt;
-        }
-
-        if (input.IsKeyDown(Key.Right))
-        {
-            _cameraYaw += lookSpeed * dt;
-        }
-
-        if (input.IsKeyDown(Key.Up))
-        {
-            _cameraPitch += lookSpeed * dt;
-        }
-
-        if (input.IsKeyDown(Key.Down))
-        {
-            _cameraPitch -= lookSpeed * dt;
-        }
-
-        _cameraPitch = Math.Clamp(_cameraPitch, -1.45f, 1.45f);
-
-        Vector3 forward = GetCameraForward();
-        Vector3 right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitY));
-
-        if (input.IsKeyDown(Key.W))
-        {
-            _cameraPosition += forward * moveSpeed * dt;
-        }
-
-        if (input.IsKeyDown(Key.S))
-        {
-            _cameraPosition -= forward * moveSpeed * dt;
-        }
-
-        if (input.IsKeyDown(Key.D))
-        {
-            _cameraPosition += right * moveSpeed * dt;
-        }
-
-        if (input.IsKeyDown(Key.A))
-        {
-            _cameraPosition -= right * moveSpeed * dt;
-        }
-
-        if (input.IsKeyDown(Key.Space))
-        {
-            _cameraPosition += Vector3.UnitY * moveSpeed * dt;
-        }
-
-        if (input.IsKeyDown(Key.ControlLeft) || input.IsKeyDown(Key.ControlRight))
-        {
-            _cameraPosition -= Vector3.UnitY * moveSpeed * dt;
-        }
-    }
-
-    private Vector3 GetCameraForward()
-    {
-        return Vector3.Normalize(new Vector3(
-            MathF.Cos(_cameraPitch) * MathF.Sin(_cameraYaw),
-            MathF.Sin(_cameraPitch),
-            -MathF.Cos(_cameraPitch) * MathF.Cos(_cameraYaw)
-        ));
     }
 }
