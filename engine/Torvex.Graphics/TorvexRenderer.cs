@@ -98,6 +98,11 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private float _snowAccumulation;
     private float _puddleAmount;
 
+    private readonly SeasonalAtmosphereSystem _seasonalAtmosphere = new();
+
+    private bool _seasonalClimateEnabled = true;
+    private bool _wasF12Down;
+
     public TorvexRenderer(IWindow window)
     {
         _window = window;
@@ -211,6 +216,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _timeOfDay = Wrap01(_timeOfDay + dt / DayLengthSeconds * timeScale);
         _moonCycle = Wrap01(_moonCycle + dt / (DayLengthSeconds * MoonCycleDays) * timeScale);
         _weatherTime += dt;
+        UpdateSeasonalClimate(dt, timeScale, input);
 
         UpdateDebugWeatherControls(dt, input);
         UpdateWorldSurfaceWeather(dt);
@@ -380,6 +386,42 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         _temperatureC = Math.Clamp(_temperatureC, -35.0f, 45.0f);
         _snowAccumulation = Math.Clamp(_snowAccumulation, 0.0f, 1.0f);
+    }
+
+    private void UpdateSeasonalClimate(float dt, float timeScale, TorvexWindow input)
+    {
+        bool f12Down = input.IsKeyDown(Key.F12);
+
+        if (f12Down && !_wasF12Down)
+        {
+            _seasonalClimateEnabled = !_seasonalClimateEnabled;
+            Console.WriteLine($"Seasonal climate: {(_seasonalClimateEnabled ? "Enabled" : "Disabled")}");
+        }
+
+        _wasF12Down = f12Down;
+
+        if (!_seasonalClimateEnabled)
+        {
+            return;
+        }
+
+        SeasonalAtmosphereSnapshot climate = _seasonalAtmosphere.Update(dt, _timeOfDay, timeScale);
+
+        float blend = Math.Clamp(dt * 0.18f, 0.0f, 1.0f);
+
+        _temperatureC = Lerp(_temperatureC, climate.TemperatureC, blend);
+        _cloudCover = Lerp(_cloudCover, climate.CloudCover, blend);
+        _humidity = Lerp(_humidity, climate.Humidity, blend);
+        _fogDensity = Lerp(_fogDensity, climate.FogDensity, blend);
+        _precipitationIntensity = Lerp(_precipitationIntensity, climate.PrecipitationIntensity, blend);
+        _windStrength = Lerp(_windStrength, climate.WindStrength, blend);
+
+        Vector2 blendedWind = Vector2.Lerp(_windDirection, climate.WindDirection, blend);
+
+        if (blendedWind.LengthSquared() > 0.0001f)
+        {
+            _windDirection = Vector2.Normalize(blendedWind);
+        }
     }
 
     private void UpdateWorldSurfaceWeather(float deltaTime)
