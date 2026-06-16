@@ -1,3 +1,4 @@
+using System.Numerics;
 using Silk.NET.Maths;
 using Silk.NET.OpenGL;
 using Silk.NET.Windowing;
@@ -13,6 +14,12 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private uint _vertexBuffer;
     private uint _shaderProgram;
 
+    private int _modelLocation;
+    private int _viewLocation;
+    private int _projectionLocation;
+
+    private float _time;
+
     public TorvexRenderer(IWindow window)
     {
         _window = window;
@@ -26,10 +33,10 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _window.FramebufferResize += SetViewport;
 
         _gl.ClearColor(0.06f, 0.07f, 0.09f, 1.0f);
+        _gl.Enable(EnableCap.DepthTest);
         _gl.Disable(EnableCap.CullFace);
-        _gl.Disable(EnableCap.DepthTest);
 
-        CreateTriangle();
+        CreateMesh();
 
         Console.WriteLine($"Graphics initialized. Framebuffer: {_window.FramebufferSize.X}x{_window.FramebufferSize.Y}");
     }
@@ -41,11 +48,37 @@ public sealed unsafe class TorvexRenderer : IDisposable
             return;
         }
 
-        _gl.Clear(ClearBufferMask.ColorBufferBit);
+        _time += (float)deltaTime;
+
+        _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+
+        float aspectRatio = MathF.Max(1f, _window.FramebufferSize.X) / MathF.Max(1f, _window.FramebufferSize.Y);
+
+        Matrix4x4 model =
+            Matrix4x4.CreateRotationX(_time * 0.65f) *
+            Matrix4x4.CreateRotationY(_time * 0.95f);
+
+        Matrix4x4 view = Matrix4x4.CreateLookAt(
+            new Vector3(0f, 0f, 3f),
+            Vector3.Zero,
+            Vector3.UnitY
+        );
+
+        Matrix4x4 projection = Matrix4x4.CreatePerspectiveFieldOfView(
+            MathF.PI / 4f,
+            aspectRatio,
+            0.1f,
+            100f
+        );
 
         _gl.UseProgram(_shaderProgram);
+
+        SetMatrix4(_modelLocation, model);
+        SetMatrix4(_viewLocation, view);
+        SetMatrix4(_projectionLocation, projection);
+
         _gl.BindVertexArray(_vertexArray);
-        _gl.DrawArrays(PrimitiveType.Triangles, 0, 3);
+        _gl.DrawArrays(PrimitiveType.Triangles, 0, 36);
         _gl.BindVertexArray(0);
     }
 
@@ -59,7 +92,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Viewport(0, 0, (uint)Math.Max(1, size.X), (uint)Math.Max(1, size.Y));
     }
 
-    private void CreateTriangle()
+    private void CreateMesh()
     {
         if (_gl is null)
         {
@@ -68,10 +101,55 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         float[] vertices =
         [
-             // position          // color
-             0.0f,  0.75f, 0.0f,  1.0f, 0.75f, 0.15f,
-            -0.75f, -0.65f, 0.0f,  0.15f, 0.85f, 0.35f,
-             0.75f, -0.65f, 0.0f,  0.25f, 0.45f, 1.0f,
+            // position              // color
+
+            // front
+            -0.5f, -0.5f,  0.5f,    0.90f, 0.62f, 0.25f,
+             0.5f, -0.5f,  0.5f,    0.90f, 0.62f, 0.25f,
+             0.5f,  0.5f,  0.5f,    0.90f, 0.62f, 0.25f,
+             0.5f,  0.5f,  0.5f,    0.90f, 0.62f, 0.25f,
+            -0.5f,  0.5f,  0.5f,    0.90f, 0.62f, 0.25f,
+            -0.5f, -0.5f,  0.5f,    0.90f, 0.62f, 0.25f,
+
+            // back
+            -0.5f, -0.5f, -0.5f,    0.45f, 0.50f, 0.60f,
+            -0.5f,  0.5f, -0.5f,    0.45f, 0.50f, 0.60f,
+             0.5f,  0.5f, -0.5f,    0.45f, 0.50f, 0.60f,
+             0.5f,  0.5f, -0.5f,    0.45f, 0.50f, 0.60f,
+             0.5f, -0.5f, -0.5f,    0.45f, 0.50f, 0.60f,
+            -0.5f, -0.5f, -0.5f,    0.45f, 0.50f, 0.60f,
+
+            // left
+            -0.5f,  0.5f,  0.5f,    0.55f, 0.72f, 0.38f,
+            -0.5f,  0.5f, -0.5f,    0.55f, 0.72f, 0.38f,
+            -0.5f, -0.5f, -0.5f,    0.55f, 0.72f, 0.38f,
+            -0.5f, -0.5f, -0.5f,    0.55f, 0.72f, 0.38f,
+            -0.5f, -0.5f,  0.5f,    0.55f, 0.72f, 0.38f,
+            -0.5f,  0.5f,  0.5f,    0.55f, 0.72f, 0.38f,
+
+            // right
+             0.5f,  0.5f,  0.5f,    0.35f, 0.55f, 0.95f,
+             0.5f, -0.5f, -0.5f,    0.35f, 0.55f, 0.95f,
+             0.5f,  0.5f, -0.5f,    0.35f, 0.55f, 0.95f,
+             0.5f, -0.5f, -0.5f,    0.35f, 0.55f, 0.95f,
+             0.5f,  0.5f,  0.5f,    0.35f, 0.55f, 0.95f,
+             0.5f, -0.5f,  0.5f,    0.35f, 0.55f, 0.95f,
+
+            // top
+            -0.5f,  0.5f, -0.5f,    0.85f, 0.72f, 0.28f,
+            -0.5f,  0.5f,  0.5f,    0.85f, 0.72f, 0.28f,
+             0.5f,  0.5f,  0.5f,    0.85f, 0.72f, 0.28f,
+             0.5f,  0.5f,  0.5f,    0.85f, 0.72f, 0.28f,
+             0.5f,  0.5f, -0.5f,    0.85f, 0.72f, 0.28f,
+            -0.5f,  0.5f, -0.5f,    0.85f, 0.72f, 0.28f,
+
+            // bottom
+            -0.5f, -0.5f, -0.5f,    0.32f, 0.32f, 0.36f,
+             0.5f, -0.5f,  0.5f,    0.32f, 0.32f, 0.36f,
+            -0.5f, -0.5f,  0.5f,    0.32f, 0.32f, 0.36f,
+             0.5f, -0.5f,  0.5f,    0.32f, 0.32f, 0.36f,
+            -0.5f, -0.5f, -0.5f,    0.32f, 0.32f, 0.36f,
+             0.5f, -0.5f, -0.5f,    0.32f, 0.32f, 0.36f,
         ];
 
         const string vertexShaderSource = """
@@ -80,12 +158,16 @@ public sealed unsafe class TorvexRenderer : IDisposable
         layout (location = 0) in vec3 aPosition;
         layout (location = 1) in vec3 aColor;
 
+        uniform mat4 uModel;
+        uniform mat4 uView;
+        uniform mat4 uProjection;
+
         out vec3 vertexColor;
 
         void main()
         {
             vertexColor = aColor;
-            gl_Position = vec4(aPosition, 1.0);
+            gl_Position = uProjection * uView * uModel * vec4(aPosition, 1.0);
         }
         """;
 
@@ -120,6 +202,10 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.DetachShader(_shaderProgram, fragmentShader);
         _gl.DeleteShader(vertexShader);
         _gl.DeleteShader(fragmentShader);
+
+        _modelLocation = _gl.GetUniformLocation(_shaderProgram, "uModel");
+        _viewLocation = _gl.GetUniformLocation(_shaderProgram, "uView");
+        _projectionLocation = _gl.GetUniformLocation(_shaderProgram, "uProjection");
 
         _vertexArray = _gl.GenVertexArray();
         _vertexBuffer = _gl.GenBuffer();
@@ -161,6 +247,27 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
         _gl.BindVertexArray(0);
+    }
+
+    private void SetMatrix4(int location, Matrix4x4 matrix)
+    {
+        if (_gl is null)
+        {
+            return;
+        }
+
+        float[] values =
+        [
+            matrix.M11, matrix.M12, matrix.M13, matrix.M14,
+            matrix.M21, matrix.M22, matrix.M23, matrix.M24,
+            matrix.M31, matrix.M32, matrix.M33, matrix.M34,
+            matrix.M41, matrix.M42, matrix.M43, matrix.M44,
+        ];
+
+        fixed (float* pointer = values)
+        {
+            _gl.UniformMatrix4(location, 1, false, pointer);
+        }
     }
 
     private uint CompileShader(ShaderType shaderType, string source)
