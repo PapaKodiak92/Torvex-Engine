@@ -67,10 +67,18 @@ public sealed unsafe class PlacedConstructionPieceRenderer : IDisposable
     {
         if (isVertical)
         {
+            const float halfBeamThickness = 0.17f;
+
+            Vector3 visualCenterCorrection = new(
+                MathF.Cos(yawRadians) * halfBeamThickness,
+                0.0f,
+                -MathF.Sin(yawRadians) * halfBeamThickness
+            );
+
             return
                 Matrix4x4.CreateRotationZ(MathF.PI * 0.5f) *
                 Matrix4x4.CreateRotationY(yawRadians) *
-                Matrix4x4.CreateTranslation(groundPosition + new Vector3(0.0f, 1.55f, 0.0f));
+                Matrix4x4.CreateTranslation(groundPosition + visualCenterCorrection + new Vector3(0.0f, 1.55f, 0.0f));
         }
 
         return
@@ -289,5 +297,6 @@ public sealed unsafe class PlacedConstructionPieceRenderer : IDisposable
         }
     }
 }
+
 
 
