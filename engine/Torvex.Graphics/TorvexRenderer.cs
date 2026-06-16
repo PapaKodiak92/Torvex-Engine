@@ -23,6 +23,7 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private GL? _gl;
 
     private WorldPrecipitationRenderer? _worldPrecipitationRenderer;
+    private TerrainTargetMarkerRenderer? _terrainTargetMarkerRenderer;
 
     private uint _terrainVertexArray;
     private uint _terrainVertexBuffer;
@@ -87,6 +88,9 @@ public sealed unsafe class TorvexRenderer : IDisposable
     private bool _isGrounded = true;
     private float _verticalVelocity;
 
+    private bool _hasTerrainTarget;
+    private Vector3 _terrainTargetPoint;
+
     private const float FieldOfViewRadians = MathF.PI / 4f;
     private const float DayLengthSeconds = 180f;
     private const float MoonCycleDays = 8f;
@@ -133,6 +137,9 @@ public sealed unsafe class TorvexRenderer : IDisposable
 
         _worldPrecipitationRenderer = new WorldPrecipitationRenderer(_gl);
         _worldPrecipitationRenderer.Initialize();
+
+        _terrainTargetMarkerRenderer = new TerrainTargetMarkerRenderer(_gl);
+        _terrainTargetMarkerRenderer.Initialize();
 
         CreateSkyShader();
         CreateSkyMesh();
@@ -344,6 +351,8 @@ public sealed unsafe class TorvexRenderer : IDisposable
         {
             ApplyWeatherPreset(WeatherType.Storm);
         }
+
+        _hasTerrainTarget = TryGetTerrainTarget(out _terrainTargetPoint);
     }
 
     public void Render(double deltaTime)
@@ -442,6 +451,16 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Uniform1(_terrainPuddleAmountLocation, _puddleAmount * (1.0f - _snowAccumulation));
 
         DrawTerrain();
+
+        if (_hasTerrainTarget)
+        {
+            _terrainTargetMarkerRenderer?.Render(
+                view,
+                projection,
+                _terrainTargetPoint,
+                _weatherTime
+            );
+        }
 
         _worldPrecipitationRenderer?.Render(
             _cameraPosition,
@@ -776,6 +795,66 @@ public sealed unsafe class TorvexRenderer : IDisposable
         float snowDepth = Lerp(0.0f, 0.26f, SmoothStep(0.0f, 1.0f, _snowAccumulation));
 
         return terrainHeight + snowMask * snowDepth;
+    }
+
+    private bool TryGetTerrainTarget(out Vector3 targetPoint)
+    {
+        targetPoint = Vector3.Zero;
+
+        Vector3 rayOrigin = _cameraPosition;
+        Vector3 rayDirection = GetCameraForward();
+
+        const float maxDistance = 34.0f;
+        const float stepDistance = 0.35f;
+        const float terrainHalfSize = 48.0f;
+
+        float previousDistance = 0.0f;
+        Vector3 previousPoint = rayOrigin;
+
+        for (float distance = stepDistance; distance <= maxDistance; distance += stepDistance)
+        {
+            Vector3 samplePoint = rayOrigin + rayDirection * distance;
+
+            if (MathF.Abs(samplePoint.X) > terrainHalfSize || MathF.Abs(samplePoint.Z) > terrainHalfSize)
+            {
+                return false;
+            }
+
+            float groundHeight = GetPlayerGroundHeight(samplePoint.X, samplePoint.Z);
+
+            if (samplePoint.Y <= groundHeight)
+            {
+                float low = previousDistance;
+                float high = distance;
+
+                for (int i = 0; i < 10; i++)
+                {
+                    float mid = (low + high) * 0.5f;
+                    Vector3 midPoint = rayOrigin + rayDirection * mid;
+                    float midGroundHeight = GetPlayerGroundHeight(midPoint.X, midPoint.Z);
+
+                    if (midPoint.Y <= midGroundHeight)
+                    {
+                        high = mid;
+                    }
+                    else
+                    {
+                        low = mid;
+                    }
+                }
+
+                Vector3 hit = rayOrigin + rayDirection * high;
+                float finalGroundHeight = GetPlayerGroundHeight(hit.X, hit.Z);
+
+                targetPoint = new Vector3(hit.X, finalGroundHeight, hit.Z);
+                return true;
+            }
+
+            previousDistance = distance;
+            previousPoint = samplePoint;
+        }
+
+        return false;
     }
 
     private Vector3 GetSunDirection()
@@ -1607,6 +1686,9 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _worldPrecipitationRenderer?.Dispose();
         _worldPrecipitationRenderer = null;
 
+        _terrainTargetMarkerRenderer?.Dispose();
+        _terrainTargetMarkerRenderer = null;
+
         if (_terrainVertexBuffer != 0)
         {
             _gl.DeleteBuffer(_terrainVertexBuffer);
@@ -1640,4 +1722,5 @@ public sealed unsafe class TorvexRenderer : IDisposable
         _gl.Dispose();
     }
 }
+
 
