@@ -480,3 +480,8 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Local repair artifacts
+repair-backups/
+*.bak-m5-snowfix
+patch-snow-terrain-clean.ps1
